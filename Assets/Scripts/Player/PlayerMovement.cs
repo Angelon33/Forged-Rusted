@@ -2,7 +2,7 @@ using Unity.VisualScripting;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
-public class Player_movement : MonoBehaviour
+public class PlayerMovement : MonoBehaviour
 {
     //PlayerAction Manager
     [SerializeField] private InputActionAsset PlayerControls;
@@ -46,34 +46,33 @@ public class Player_movement : MonoBehaviour
         set => characterController.height = value;
 
     }
-    
-    
+
+
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Awake()
     {
         characterController = GetComponent<CharacterController>();
         mainCamera = Camera.main;
 
-        moveAction = PlayerControls.FindActionMap("Gameplay").FindAction("Move");
-        lookAction = PlayerControls.FindActionMap("Gameplay").FindAction("Look");
-        sprintAction = PlayerControls.FindActionMap("Gameplay").FindAction("Sprint");
-        jumpAction = PlayerControls.FindActionMap("Gameplay").FindAction("Jump");
-        crouchAction = PlayerControls.FindActionMap("Gameplay").FindAction("Crouch");
+        // Gamepla -> Player
+        moveAction = PlayerControls.FindActionMap("Player").FindAction("Move");
+        lookAction = PlayerControls.FindActionMap("Player").FindAction("Look");
+        sprintAction = PlayerControls.FindActionMap("Player").FindAction("Sprint");
+        jumpAction = PlayerControls.FindActionMap("Player").FindAction("Jump");
+        crouchAction = PlayerControls.FindActionMap("Player").FindAction("Crouch");
 
         moveAction.performed += context => moveInput = context.ReadValue<Vector2>();
         moveAction.canceled += context => moveInput = Vector2.zero;
 
         lookAction.performed += context => lookInput = context.ReadValue<Vector2>();
         lookAction.canceled += context => lookInput = Vector2.zero;
-
-
-
-
     }
+
     private void Start()
     {
         standingHeight = characterController.height;
     }
+
     private void OnEnable()
     {
         moveAction.Enable();
