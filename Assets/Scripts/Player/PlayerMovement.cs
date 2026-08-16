@@ -54,7 +54,7 @@ public class PlayerMovement : MonoBehaviour
         characterController = GetComponent<CharacterController>();
         mainCamera = Camera.main;
 
-        // Gamepla -> Player
+        // Gameplay -> Player
         moveAction = PlayerControls.FindActionMap("Player").FindAction("Move");
         lookAction = PlayerControls.FindActionMap("Player").FindAction("Look");
         sprintAction = PlayerControls.FindActionMap("Player").FindAction("Sprint");

@@ -48,6 +48,10 @@ public class VoxelGrid : MonoBehaviour
         block.transform.parent = transform;
         block.name = $"Block_{x}_{y}_{z}";
 
+        // Attach BlockData script
+        BlockData data = block.AddComponent<BlockData>();
+        data.blockType = "GrassBlock";
+
         blocks[x, y, z] = block;
     }
 
