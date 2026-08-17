@@ -15,11 +15,7 @@ public class BlockInteraction : MonoBehaviour
     {
         Cursor.lockState = CursorLockMode.Locked;
         Cursor.visible = false;
-
-        if (playerCamera == null)
-        {
-            playerCamera = Camera.main;
-        }
+        if (playerCamera == null) playerCamera = Camera.main;
     }
 
     void Update()
@@ -42,6 +38,12 @@ public class BlockInteraction : MonoBehaviour
 
         if (Physics.Raycast(ray, out RaycastHit hit, reachDistance))
         {
+            // Verify if the targeted object is actually part of the voxel grid
+            bool isVoxelBlock = hit.collider.GetComponent<BlockData>() != null ||
+                                (voxelGrid != null && hit.transform.IsChildOf(voxelGrid.transform));
+
+            if (!isVoxelBlock) return; // Ignore standalone scene objects like Sphere or Box
+
             float scale = voxelGrid.blockScale;
 
             if (destroy)

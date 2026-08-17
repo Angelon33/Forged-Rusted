@@ -1,2 +1,15 @@
 fileFormatVersion: 2
 guid: 198d20c8e956a3346b383698f1f50f45
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - playerCamera: {instanceID: 0}
+  - voxelGrid: {instanceID: 0}
+  - outlineMaterial: {fileID: 2100000, guid: 610ef3a5c4363ec4180dc5efb0f5c1ca, type: 2}
+  - targetBlockText: {instanceID: 0}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

@@ -4,20 +4,30 @@ using TMPro;
 public class BlockHighlighter : MonoBehaviour
 {
     [Header("Settings")]
-    public float reachDistance = 10f;
     public Camera playerCamera;
     public VoxelGrid voxelGrid;
     public Color outlineColor = Color.yellow;
     public float lineWidth = 0.02f;
+    public Material outlineMaterial; // Added missing outline material reference
 
     [Header("UI Reference")]
     public TextMeshProUGUI targetBlockText;
 
     private LineRenderer lineRenderer;
+    private float reachDistance = 5f; // Automatically updated from BlockInteraction
+    private OutlineObject currentHighlightedObject; // Added missing highlight tracker
 
     void Start()
     {
         if (playerCamera == null) playerCamera = Camera.main;
+
+        // Fetch reach distance from BlockInteraction on the same GameObject
+        BlockInteraction interaction = GetComponent<BlockInteraction>();
+        if (interaction != null)
+        {
+            reachDistance = interaction.reachDistance;
+        }
+
         SetupLineRenderer();
     }
 
@@ -39,18 +49,18 @@ public class BlockHighlighter : MonoBehaviour
         if (playerCamera == null) return;
 
         Ray ray = playerCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
-
         if (Physics.Raycast(ray, out RaycastHit hit, reachDistance))
         {
-            lineRenderer.enabled = true;
-
-            // Check if object belongs to the Voxel Grid
             bool isVoxelBlock = (voxelGrid != null && hit.transform.IsChildOf(voxelGrid.transform))
                                 || hit.collider.GetComponent<BlockData>() != null;
 
             if (isVoxelBlock)
             {
-                // 1. VOXEL GRID HIGHLIGHT
+                // Clear any prop highlight
+                ClearCurrentHighlight();
+
+                // 1. VOXEL GRID CUBE HIGHLIGHT
+                lineRenderer.enabled = true;
                 float scale = (voxelGrid != null) ? voxelGrid.blockScale : 0.5f;
                 Vector3 targetPoint = hit.point - (hit.normal * 0.01f);
                 Vector3Int gridPos = GetGridPosition(targetPoint, scale);
@@ -67,8 +77,25 @@ public class BlockHighlighter : MonoBehaviour
             }
             else
             {
-                // 2. STANDALONE OBJECT HIGHLIGHT (Oriented & Padded Bounding Box)
-                DrawOrientedBoundsOutline(hit.collider);
+                // Disable cube line wireframe
+                lineRenderer.enabled = false;
+
+                // 2. COMPLEX OBJECT MESH HIGHLIGHT
+                OutlineObject outlineObj = hit.collider.GetComponentInParent<OutlineObject>();
+
+                // Automatically add component if missing on standalone props
+                if (outlineObj == null)
+                {
+                    outlineObj = hit.collider.gameObject.AddComponent<OutlineObject>();
+                }
+
+                if (currentHighlightedObject != outlineObj)
+                {
+                    ClearCurrentHighlight();
+                    currentHighlightedObject = outlineObj;
+                    currentHighlightedObject.outlineMaterial = outlineMaterial;
+                    currentHighlightedObject.EnableHighlight(true);
+                }
 
                 if (targetBlockText != null)
                 {
@@ -80,6 +107,7 @@ public class BlockHighlighter : MonoBehaviour
         else
         {
             lineRenderer.enabled = false;
+            ClearCurrentHighlight();
 
             if (targetBlockText != null)
             {
@@ -88,77 +116,22 @@ public class BlockHighlighter : MonoBehaviour
         }
     }
 
-    // Draws oriented bounding box that rotates with the object and includes a slight padding margin
-    private void DrawOrientedBoundsOutline(Collider col)
+    private void ClearCurrentHighlight()
     {
-        Transform t = col.transform;
-        Vector3 center;
-        Vector3 size;
-
-        if (col is BoxCollider box)
+        if (currentHighlightedObject != null)
         {
-            center = box.center;
-            size = box.size;
+            currentHighlightedObject.EnableHighlight(false);
+            currentHighlightedObject = null;
         }
-        else if (col is SphereCollider sphere)
-        {
-            center = sphere.center;
-            size = Vector3.one * (sphere.radius * 2f);
-        }
-        else
-        {
-            // Fallback for MeshCollider or CapsuleCollider
-            center = t.InverseTransformPoint(col.bounds.center);
-            size = t.InverseTransformVector(col.bounds.size);
-            size = new Vector3(Mathf.Abs(size.x), Mathf.Abs(size.y), Mathf.Abs(size.z));
-        }
-
-        // Add 2% padding so the wireframe hovers cleanly outside the mesh
-        Vector3 extents = (size * 0.5f) * 1.02f;
-
-        // Local corners around the collider center
-        Vector3[] localCorners = new Vector3[8]
-        {
-            center + new Vector3(-extents.x, -extents.y, -extents.z),
-            center + new Vector3( extents.x, -extents.y, -extents.z),
-            center + new Vector3( extents.x, -extents.y,  extents.z),
-            center + new Vector3(-extents.x, -extents.y,  extents.z),
-            center + new Vector3(-extents.x,  extents.y, -extents.z),
-            center + new Vector3( extents.x,  extents.y, -extents.z),
-            center + new Vector3( extents.x,  extents.y,  extents.z),
-            center + new Vector3(-extents.x,  extents.y,  extents.z)
-        };
-
-        // Transform local corners into world space using object's rotation & position
-        Vector3 p0 = t.TransformPoint(localCorners[0]);
-        Vector3 p1 = t.TransformPoint(localCorners[1]);
-        Vector3 p2 = t.TransformPoint(localCorners[2]);
-        Vector3 p3 = t.TransformPoint(localCorners[3]);
-        Vector3 p4 = t.TransformPoint(localCorners[4]);
-        Vector3 p5 = t.TransformPoint(localCorners[5]);
-        Vector3 p6 = t.TransformPoint(localCorners[6]);
-        Vector3 p7 = t.TransformPoint(localCorners[7]);
-
-        Vector3[] points = new Vector3[]
-        {
-            p0, p1, p2, p3, p0,
-            p4, p5, p6, p7, p4,
-            p5, p1, p2, p6, p7, p3
-        };
-
-        lineRenderer.SetPositions(points);
     }
 
-    // Draws fixed grid cube wireframe
     private void DrawCubeOutline(Vector3 center, float size)
     {
         float h = size * 0.505f;
-
         Vector3 p0 = center + new Vector3(-h, -h, -h);
         Vector3 p1 = center + new Vector3(h, -h, -h);
         Vector3 p2 = center + new Vector3(h, -h, h);
         Vector3 p3 = center + new Vector3(-h, -h, h);
-
         Vector3 p4 = center + new Vector3(-h, h, -h);
         Vector3 p5 = center + new Vector3(h, h, -h);
         Vector3 p6 = center + new Vector3(h, h, h);
