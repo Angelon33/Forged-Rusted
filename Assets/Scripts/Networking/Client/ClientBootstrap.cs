@@ -1,29 +1,53 @@
+using Stopwatch = System.Diagnostics.Stopwatch;
 using UnityEngine;
 
-public class ClientBootstrap : MonoBehaviour
+namespace Networking
 {
-    private SimpleUdpClient client;
-
-    void Start()
+    public sealed class ClientBootstrap : MonoBehaviour
     {
-        client = new SimpleUdpClient();
+        [SerializeField] private string serverAddress = "127.0.0.1";
+        [SerializeField] private ushort serverPort = 25565;
 
-        client.Start("127.0.0.1", 25565);
+        private GameClient _client;
 
-        InvokeRepeating(nameof(Send), 1f, 0.01f);
-    }
+        private void Start()
+        {
+            _client = new GameClient(new UdpTransport());
+            _client.StateChanged += OnStateChanged;
+            _client.Error += OnClientError;
+            _client.Connect(serverAddress, serverPort, GetTime());
+        }
 
-    void Send()
-    {
-        client.SendHello();
-    }
+        private void Update()
+        {
+            _client?.Update(GetTime());
+        }
 
-    void OnDestroy()
-    {
-        client.Stop();
-    }
+        private void OnDestroy()
+        {
+            if (_client == null)
+                return;
 
-    void Update()
-    {
+            _client.StateChanged -= OnStateChanged;
+            _client.Error -= OnClientError;
+            _client.Dispose();
+            _client = null;
+        }
+
+        private static void OnStateChanged(ClientConnectionState state)
+        {
+            Debug.Log($"Client connection state: {state}");
+        }
+
+        private static void OnClientError(string message)
+        {
+            Debug.LogWarning(message);
+        }
+
+        private static double GetTime()
+        {
+            return (double)Stopwatch.GetTimestamp() /
+                   Stopwatch.Frequency;
+        }
     }
 }

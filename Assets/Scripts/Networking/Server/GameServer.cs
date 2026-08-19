@@ -1,121 +1,319 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Net;
-using Unity.Collections;
-using Unity.VisualScripting;
-using UnityEngine;
+using System.Security.Cryptography;
 
-namespace Networking {
-    public class GameServer
+namespace Networking
+{
+    public sealed class GameServer : IDisposable
     {
+        private const int MaximumPeers = 128;
+        private const int MaximumEventsPerUpdate = 256;
+        private const double PendingTimeout = 10.0;
+        private const double ConnectedTimeout = 15.0;
 
-        private readonly Dictionary<byte, Peer> _peers = new();
+        private readonly Dictionary<ITransportHandle, Peer> _peersByHandle = new();
+        private readonly Dictionary<uint, Peer> _peersById = new();
+        private readonly List<Peer> _timedOutPeers = new();
+        private readonly INetworkTransport _transport;
+        private uint _nextPeerId = 1;
+        private bool _started;
+        private bool _disposed;
 
-        private INetworkTransport _transport;
+        public bool IsRunning => _started && _transport.IsRunning;
+        public int PeerCount => _peersById.Count;
 
-        private List<ReceivedPacket> _packets = new();
+        public event Action<Peer> PeerConnected;
+        public event Action<uint> PeerDisconnected;
+        public event Action<string> Error;
 
         public GameServer(INetworkTransport transport)
         {
-            this._transport = transport;
+            _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         }
 
-        public void Start()
+        public void Start(ushort port)
         {
-            if (this._transport == null)
-            {
+            ThrowIfDisposed();
+
+            if (_started)
+                throw new InvalidOperationException("Server is already running.");
+
+            _transport.StartServer(port);
+            _started = true;
+        }
+
+        public void Update(double now)
+        {
+            if (!_started || _disposed)
                 return;
-            }
 
-            _transport.Start();
-            Debug.Log("Server started");
-        }
-
-        public void Close()
-        {
-            _transport.Dispose();
-            Debug.Log("Server stopped");
-        }
-
-        public void Update()
-        {
-            _transport.Poll(_packets);
-
-            foreach (var packet in _packets)
+            int processed = 0;
+            while (processed < MaximumEventsPerUpdate &&
+                   _transport.TryPollEvent(out TransportEvent transportEvent))
             {
-                var reader = new PacketReader(packet.Data);
-                byte version = reader.ReadByte();
-                if(version != Packet.VERSION)
+                processed++;
+                if (transportEvent.Type == TransportEventType.Error)
                 {
+                    Error?.Invoke(transportEvent.Error);
                     continue;
                 }
-                HandleRaw(reader, packet);
+
+                HandleDatagram(transportEvent.Remote, transportEvent.Data, now);
             }
+
+            RemoveTimedOutPeers(now);
         }
 
-        private void HandleRaw(PacketReader reader, ReceivedPacket raw)
+        public void Dispose()
         {
+            if (_disposed)
+                return;
 
-            PacketType type = (PacketType)reader.ReadByte();
-
-            Peer peer = ResolvePeer(raw.Handle);
-
-            HandlePacket(type, reader, peer);
+            _started = false;
+            _peersByHandle.Clear();
+            _peersById.Clear();
+            _timedOutPeers.Clear();
+            _transport.Dispose();
+            _disposed = true;
         }
 
-        private void HandlePacket(PacketType type, PacketReader reader, Peer peer)
+        private void HandleDatagram(ITransportHandle remote, byte[] data, double now)
         {
-            switch (type)
+            if (remote == null ||
+                !NetworkProtocol.TryDecode(
+                    data,
+                    out NetworkMessageType type,
+                    out PacketReader payload))
+                return;
+
+            try
             {
-                case PacketType.Join_Request:
-                    HandleJoin(peer);
-                    break;
-
+                switch (type)
+                {
+                    case NetworkMessageType.ClientHello:
+                        HandleClientHello(remote, payload, now);
+                        break;
+                    case NetworkMessageType.ClientReady:
+                        HandleClientReady(remote, payload, now);
+                        break;
+                    case NetworkMessageType.Heartbeat:
+                        HandleHeartbeat(remote, payload, now);
+                        break;
+                    case NetworkMessageType.Disconnect:
+                        HandleDisconnect(remote, payload);
+                        break;
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // Malformed payloads are ignored.
             }
         }
 
-        private void HandleJoin(Peer peer)
+        private void HandleClientHello(
+            ITransportHandle remote,
+            PacketReader payload,
+            double now)
         {
-            PacketWriter writer = new PacketWriter();
+            if (payload.Remaining != sizeof(ulong))
+                return;
 
-            Join_Response response = new Join_Response(peer.Id);
+            ulong clientNonce = payload.ReadUInt64();
+            if (clientNonce == 0)
+                return;
 
-            Debug.Log("RECEIVED JOIN REQUEST");
-            Debug.Log("RESPONDING WITH ID: " + peer.Id);
+            if (_peersByHandle.TryGetValue(remote, out Peer existing))
+            {
+                if (existing.ClientNonce == clientNonce)
+                {
+                    existing.LastReceiveTime = now;
+                    SendServerAccept(existing);
+                    return;
+                }
 
-            response.Serialize(ref writer);
+                if (existing.State == ServerPeerState.Connected)
+                    return;
 
-            _transport.Send(writer.ToArray(), peer.Handle);
-        }
-
-        private Peer ResolvePeer(ITransportHandle handle)
-        {
-            foreach (var p in _peers.Values) {
-                if (p.Handle.Equals(handle))
-                    return p;
+                RemovePeer(existing, false);
             }
-            byte id = PeerIdProvider.Next();
 
-            var peer = new Peer(id, handle);
-            _peers[id] = peer;
+            if (_peersById.Count >= MaximumPeers)
+                return;
 
-            return peer;
-        }
-    }
+            var peer = new Peer(
+                AllocatePeerId(),
+                clientNonce,
+                CreateRandomUInt64(),
+                remote,
+                now);
 
-    public static class PeerIdProvider
-    {
-        private static byte _nextId = 1;
-
-        public static byte Next()
-        {
-            return _nextId++;
+            _peersByHandle.Add(remote, peer);
+            _peersById.Add(peer.Id, peer);
+            SendServerAccept(peer);
         }
 
-        public static void Reset()
+        private void HandleClientReady(
+            ITransportHandle remote,
+            PacketReader payload,
+            double now)
         {
-            _nextId = 1;
+            if (payload.Remaining != sizeof(uint) + sizeof(ulong))
+                return;
+
+            uint peerId = payload.ReadUInt32();
+            ulong token = payload.ReadUInt64();
+            if (!TryAuthenticate(remote, peerId, token, out Peer peer))
+                return;
+
+            peer.LastReceiveTime = now;
+            if (peer.State != ServerPeerState.Connected)
+            {
+                peer.State = ServerPeerState.Connected;
+                PeerConnected?.Invoke(peer);
+            }
+
+            SendMessage(
+                peer.Handle,
+                NetworkMessageType.ServerReady,
+                writer => writer.Write(peer.Id));
+        }
+
+        private void HandleHeartbeat(
+            ITransportHandle remote,
+            PacketReader payload,
+            double now)
+        {
+            if (payload.Remaining != sizeof(uint) + sizeof(ulong))
+                return;
+
+            uint peerId = payload.ReadUInt32();
+            ulong token = payload.ReadUInt64();
+            if (!TryAuthenticate(remote, peerId, token, out Peer peer) ||
+                peer.State != ServerPeerState.Connected)
+                return;
+
+            peer.LastReceiveTime = now;
+            SendMessage(
+                peer.Handle,
+                NetworkMessageType.HeartbeatAck,
+                writer => writer.Write(peer.Id));
+        }
+
+        private void HandleDisconnect(ITransportHandle remote, PacketReader payload)
+        {
+            if (payload.Remaining != sizeof(uint) + sizeof(ulong))
+                return;
+
+            uint peerId = payload.ReadUInt32();
+            ulong token = payload.ReadUInt64();
+            if (TryAuthenticate(remote, peerId, token, out Peer peer))
+                RemovePeer(peer, peer.State == ServerPeerState.Connected);
+        }
+
+        private bool TryAuthenticate(
+            ITransportHandle remote,
+            uint peerId,
+            ulong token,
+            out Peer peer)
+        {
+            peer = null;
+            if (!_peersByHandle.TryGetValue(remote, out Peer byHandle) ||
+                !_peersById.TryGetValue(peerId, out Peer byId) ||
+                !ReferenceEquals(byHandle, byId) ||
+                byHandle.SessionToken != token)
+                return false;
+
+            peer = byHandle;
+            return true;
+        }
+
+        private void SendServerAccept(Peer peer)
+        {
+            SendMessage(
+                peer.Handle,
+                NetworkMessageType.ServerAccept,
+                writer =>
+                {
+                    writer.Write(peer.ClientNonce);
+                    writer.Write(peer.Id);
+                    writer.Write(peer.SessionToken);
+                });
+        }
+
+        private void SendMessage(
+            ITransportHandle destination,
+            NetworkMessageType type,
+            Action<PacketWriter> writePayload)
+        {
+            byte[] data = NetworkProtocol.Encode(type, writePayload);
+            if (!_transport.Send(destination, data))
+                Error?.Invoke($"Could not queue {type} message for sending.");
+        }
+
+        private void RemoveTimedOutPeers(double now)
+        {
+            _timedOutPeers.Clear();
+            foreach (Peer peer in _peersById.Values)
+            {
+                double timeout = peer.State == ServerPeerState.Connected
+                    ? ConnectedTimeout
+                    : PendingTimeout;
+
+                if (now - peer.LastReceiveTime >= timeout)
+                    _timedOutPeers.Add(peer);
+            }
+
+            foreach (Peer peer in _timedOutPeers)
+                RemovePeer(peer, peer.State == ServerPeerState.Connected);
+
+            _timedOutPeers.Clear();
+        }
+
+        private void RemovePeer(Peer peer, bool notify)
+        {
+            _peersByHandle.Remove(peer.Handle);
+            _peersById.Remove(peer.Id);
+            if (notify)
+                PeerDisconnected?.Invoke(peer.Id);
+        }
+
+        private uint AllocatePeerId()
+        {
+            for (int attempt = 0; attempt <= MaximumPeers; attempt++)
+            {
+                uint candidate = _nextPeerId++;
+                if (candidate == 0)
+                    candidate = _nextPeerId++;
+
+                if (!_peersById.ContainsKey(candidate))
+                    return candidate;
+            }
+
+            throw new InvalidOperationException("No peer IDs are available.");
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(GameServer));
+        }
+
+        private static ulong CreateRandomUInt64()
+        {
+            byte[] bytes = new byte[sizeof(ulong)];
+            ulong value;
+
+            using (RandomNumberGenerator random = RandomNumberGenerator.Create())
+            {
+                do
+                {
+                    random.GetBytes(bytes);
+                    value = BitConverter.ToUInt64(bytes, 0);
+                }
+                while (value == 0);
+            }
+
+            return value;
         }
     }
 }

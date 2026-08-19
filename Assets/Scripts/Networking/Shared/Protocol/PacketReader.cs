@@ -15,13 +15,14 @@ namespace Networking
 
         public PacketReader(byte[] buffer)
         {
-            _buffer = buffer;
+            _buffer = buffer ?? throw new ArgumentNullException(nameof(buffer));
         }
 
         private void EnsureReadable(int bytes)
         {
-            if (_position + bytes > _buffer.Length)
-                throw new InvalidOperationException("Attempted to read past end of packet.");
+            if (bytes < 0 || bytes > _buffer.Length - _position)
+                throw new InvalidOperationException(
+                    "Attempted to read past end of packet.");
         }
 
         public byte ReadByte()
@@ -158,7 +159,7 @@ namespace Networking
 
         public bool CanRead(int bytes)
         {
-            return _position + bytes <= _buffer.Length;
+            return bytes >= 0 && bytes <= _buffer.Length - _position;
         }
     }
 }
