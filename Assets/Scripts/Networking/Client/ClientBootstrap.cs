@@ -10,7 +10,7 @@ public class ClientBootstrap : MonoBehaviour
 
         client.Start("127.0.0.1", 25565);
 
-        InvokeRepeating(nameof(Send), 1f, 2f);
+        InvokeRepeating(nameof(Send), 1f, 0.01f);
     }
 
     void Send()
@@ -25,9 +25,5 @@ public class ClientBootstrap : MonoBehaviour
 
     void Update()
     {
-        while (client.TryDequeueLog(out var msg))
-        {
-            Debug.Log(msg);
-        }
     }
 }

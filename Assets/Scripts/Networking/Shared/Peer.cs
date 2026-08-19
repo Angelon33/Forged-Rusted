@@ -1,20 +1,20 @@
+using System;
 
 public class Peer
 {
-    private int _id;
+    public byte Id { get; }
 
-    public Peer(int id)
-    {
-        _id = id;
-    }
+    public ITransportHandle Handle { get; }
 
-    public int getId()
-    {
-        return _id;
-    }
+    public DateTime LastReceiveTime { get; set; }
 
-    public void setId(int id)
+    public uint LastSequenceReceived { get; set; }
+
+    public uint LastSequenceSent { get; set; }
+
+    public Peer(byte id, ITransportHandle handle)
     {
-        _id = id;
+        Id = id;
+        Handle = handle;
     }
 }

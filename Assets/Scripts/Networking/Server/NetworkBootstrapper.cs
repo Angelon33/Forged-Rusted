@@ -1,31 +1,29 @@
 using Unity.VisualScripting;
 using UnityEngine;
 
-public class NetworkBootstrap : MonoBehaviour
-{
-
-    private GameServer server;
-
-    void Start()
+namespace Networking {
+    public class NetworkBootstrap : MonoBehaviour
     {
-        var transport = new UdpTransport();
 
-        server = new GameServer(transport);
+        private GameServer server;
 
-        server.Start();
-    }
-
-    void Update()
-    {
-        server?.Update();
-        while (server.TryDequeueLog(out var msg))
+        void Start()
         {
-            Debug.Log(msg);
-        }
-    }
+            var transport = new UdpTransport();
 
-    void OnApplicationQuit()
-    {
-        server?.Close();
+            server = new GameServer(transport);
+
+            server.Start();
+        }
+
+        void FixedUpdate()
+        {
+            server?.Update();
+        }
+
+        void OnApplicationQuit()
+        {
+            server?.Close();
+        }
     }
 }

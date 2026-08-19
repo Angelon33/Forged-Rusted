@@ -2,17 +2,17 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using UnityEngine;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 
 public class UdpTransport : INetworkTransport
 {
-    private readonly ConcurrentQueue<Packet> _incoming = new();
+    private readonly ConcurrentQueue<ReceivedPacket> _incoming = new();
+    private readonly ConcurrentQueue<(byte[] data, IPEndPoint target)> _outgoing = new();
 
-    private readonly ConcurrentQueue<OutgoingPacket> _outgoing = new();
-
-    private readonly Dictionary<int, IPEndPoint> _peers = new();
+    private readonly Dictionary<byte, IPEndPoint> _peers = new();
 
     private Thread _networkThread;
 
@@ -20,21 +20,13 @@ public class UdpTransport : INetworkTransport
 
     private UdpClient _socket;
 
-    private int _port = 25565;
-
     public UdpTransport(int port = 25565)
     {
-        this._port = port;
+        _socket = new UdpClient(port);
     }
 
     public void Start()
-    {
-        if(_socket != null)
-        {
-            return;
-        }
-        _socket = new UdpClient(_port);
-
+    { 
         _running = true;
 
         _networkThread = new Thread(NetworkLoop);
@@ -52,21 +44,13 @@ public class UdpTransport : INetworkTransport
         Stop();
     }
 
-    public void Broadcast(Packet packet)
+    public void Send(byte[] data, ITransportHandle handle)
     {
-        _outgoing.Enqueue(new OutgoingPacket(-1, packet, true));
+        var udp = (UdpTransportHandle)handle;
+        _outgoing.Enqueue((data, udp.EndPoint));
     }
 
-    public void Send(int peerId, Packet packet)
-    {
-        if(!_peers.ContainsKey(peerId))
-        {
-            return;
-        }
-        _outgoing.Enqueue(new OutgoingPacket(peerId, packet));
-    }
-
-    public void Poll(List<Packet> packets)
+    public void Poll(List<ReceivedPacket> packets)
     {
         if(packets == null)
         {
@@ -85,8 +69,18 @@ public class UdpTransport : INetworkTransport
     {
         while (_running)
         {
-            Receive();
-            Send();
+            try
+            {
+                Receive();
+                Send();
+            }
+            catch(SocketException)
+            {
+            }
+            catch(Exception ex)
+            {
+                Debug.Log(ex);
+            }
 
             Thread.Sleep(1);
         }
@@ -97,62 +91,20 @@ public class UdpTransport : INetworkTransport
         while (_socket.Available > 0)
         {
             IPEndPoint remote = new IPEndPoint(IPAddress.Any, 0);
-
             byte[] data = _socket.Receive(ref remote);
 
-            var peerId = ResolvePeer(remote);
-
+            Debug.Log("RECEIVED PACKET");
             _incoming.Enqueue(
-                new Packet(peerId, BitConverter.GetBytes(peerId))
+                new ReceivedPacket(new UdpTransportHandle(remote), data)
             );
         }
     }
 
-    private int ResolvePeer(IPEndPoint endpoint)
-    {
-        foreach (var kv in _peers)
-        {
-            if (kv.Value.Equals(endpoint))
-                return kv.Key;
-        }
-
-        var id = PeerIdProvider.Next();
-        _peers[id] = endpoint;
-
-        return id;
-    }
-
         private void Send()
     {
-        while (_outgoing.TryDequeue(out var packet))
+        while (_outgoing.TryDequeue(out var item))
         {
-            var data = packet.packet.data;
-            if(packet.shouldBroadcast)
-            {
-                foreach(var peer in _peers)
-                {
-                    _socket.Send(data, data.Length, peer.Value);
-                }
-                continue;
-            }
-            if (!_peers.TryGetValue(packet.peerId, out var endpoint))
-                continue;
-
-            _socket.Send(data, data.Length, endpoint);
-        }
-    }
-
-    private record OutgoingPacket
-    {
-        public readonly bool shouldBroadcast;
-        public readonly int peerId;
-        public readonly Packet packet;
-
-        public OutgoingPacket(int id, Packet packet, bool shouldBroadcast = false)
-        {
-            this.peerId = id;
-            this.packet = packet;
-            this.shouldBroadcast = shouldBroadcast;
+            _socket.Send(item.data, item.data.Length, item.target);
         }
     }
 }

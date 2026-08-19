@@ -3,6 +3,9 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
+using Networking;
+using Unity.Collections;
+using UnityEngine;
 
 public class SimpleUdpClient
 {
@@ -14,13 +17,6 @@ public class SimpleUdpClient
 
     private Thread _thread;
     private bool _running;
-
-    private readonly ConcurrentQueue<string> _logs = new();
-
-    public bool TryDequeueLog(out string msg)
-    {
-        return _logs.TryDequeue(out msg);
-    }
 
 
     public void Start(string ip, int port)
@@ -34,27 +30,31 @@ public class SimpleUdpClient
         _thread = new Thread(Loop);
         _thread.Start();
 
-        _logs.Enqueue("Client started");
+        Debug.Log("Client started");
     }
 
     public void SendHello()
     {
         byte[] data = new byte[] { 1 };
 
-        _outgoing.Enqueue(new Packet(-1, data));
+        _outgoing.Enqueue(new Join_Request());
 
-        _logs.Enqueue("Sent HELLO");
+        Debug.Log("Sent HELLO");
     }
 
     private void Loop()
     {
         while (_running)
         {
+            PacketWriter writer = new PacketWriter();
             while (_outgoing.TryDequeue(out var packet))
             {
-                var data = packet.data;
+                packet.Serialize(ref writer);
+
+                var data = writer.ToArray();
 
                 _socket.Send(data, data.Length, _serverEndPoint);
+                writer.Reset();
             }
 
             if (_socket.Available > 0)
@@ -83,7 +83,7 @@ public class SimpleUdpClient
     {
         byte type = data[0];
 
-        _logs.Enqueue("Received RESPONSE from server: " + type);
+        Debug.Log("Received RESPONSE from server: " + type);
     }
 
     public void Stop()
@@ -92,6 +92,6 @@ public class SimpleUdpClient
         _socket.Close();
         _thread.Join();
 
-        _logs.Enqueue("Client stopped");
+        Debug.Log("Client stopped");
     }
 }
