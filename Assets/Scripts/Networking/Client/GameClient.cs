@@ -12,97 +12,166 @@ namespace Networking
         private const int MaximumEventsPerUpdate = 256;
 
         private readonly INetworkTransport _transport;
+
         private ITransportHandle _server;
-        private ClientConnectionState _state = ClientConnectionState.Stopped;
+
+        private ClientConnectionState _state =
+            ClientConnectionState.Stopped;
+
         private ulong _clientNonce;
         private ulong _sessionToken;
         private uint _peerId;
+
         private double _startedAt;
         private double _lastSendTime;
         private double _lastServerReceiveTime;
+
         private bool _disposed;
 
         public ClientConnectionState State => _state;
         public uint PeerId => _peerId;
-        public bool IsConnected => _state == ClientConnectionState.Connected;
 
-        public event Action<ClientConnectionState> StateChanged;
+        public bool IsConnected =>
+            _state ==
+            ClientConnectionState.Connected;
+
+        public event Action<ClientConnectionState>
+            StateChanged;
+
         public event Action<string> Error;
 
-        public GameClient(INetworkTransport transport)
+        public event Action<NetworkMessageType, byte[]>
+            MessageReceived;
+
+        public GameClient(
+            INetworkTransport transport)
         {
-            _transport = transport ?? throw new ArgumentNullException(nameof(transport));
+            _transport = transport ??
+                throw new ArgumentNullException(
+                    nameof(transport));
         }
 
-        public void Connect(string address, ushort port, double now)
+        public void Connect(
+            string address,
+            ushort port,
+            double now)
         {
             ThrowIfDisposed();
 
-            if (_state != ClientConnectionState.Stopped)
-                throw new InvalidOperationException("Client has already been started.");
+            if (_state !=
+                ClientConnectionState.Stopped)
+            {
+                throw new InvalidOperationException(
+                    "Client has already been started.");
+            }
 
-            _server = _transport.StartClient(address, port);
-            _clientNonce = CreateRandomUInt64();
+            _server =
+                _transport.StartClient(
+                    address,
+                    port);
+
+            _clientNonce =
+                CreateRandomUInt64();
+
             _startedAt = now;
             _lastServerReceiveTime = now;
-            SetState(ClientConnectionState.SendingHello);
+
+            SetState(
+                ClientConnectionState.SendingHello);
+
             SendHello(now);
         }
 
         public void Update(double now)
         {
-            if (_disposed || _state == ClientConnectionState.Stopped)
+            if (_disposed ||
+                _state ==
+                ClientConnectionState.Stopped)
+            {
                 return;
+            }
 
             int processed = 0;
-            while (processed < MaximumEventsPerUpdate &&
-                   _transport.TryPollEvent(out TransportEvent transportEvent))
+
+            while (
+                processed < MaximumEventsPerUpdate &&
+                _transport.TryPollEvent(
+                    out TransportEvent transportEvent))
             {
                 processed++;
 
-                if (transportEvent.Type == TransportEventType.Error)
+                if (transportEvent.Type ==
+                    TransportEventType.Error)
                 {
-                    Error?.Invoke(transportEvent.Error);
+                    Error?.Invoke(
+                        transportEvent.Error);
+
                     continue;
                 }
 
-                if (transportEvent.Remote == null || !_server.Equals(transportEvent.Remote))
+                if (transportEvent.Remote == null ||
+                    !_server.Equals(
+                        transportEvent.Remote))
+                {
                     continue;
+                }
 
-                HandleDatagram(transportEvent.Data, now);
+                HandleDatagram(
+                    transportEvent.Data,
+                    now);
             }
 
-            if (_state == ClientConnectionState.SendingHello ||
-                _state == ClientConnectionState.SendingReady)
+            if (_state ==
+                    ClientConnectionState.SendingHello ||
+                _state ==
+                    ClientConnectionState.SendingReady)
             {
-                if (now - _startedAt >= ConnectTimeout)
+                if (now - _startedAt >=
+                    ConnectTimeout)
                 {
-                    TimeOut("Connection handshake timed out.");
+                    TimeOut(
+                        "Connection handshake timed out.");
+
                     return;
                 }
 
-                if (now - _lastSendTime >= RetryInterval)
+                if (now - _lastSendTime >=
+                    RetryInterval)
                 {
-                    if (_state == ClientConnectionState.SendingHello)
+                    if (_state ==
+                        ClientConnectionState.SendingHello)
+                    {
                         SendHello(now);
+                    }
                     else
+                    {
                         SendReady(now);
+                    }
                 }
 
                 return;
             }
 
-            if (_state != ClientConnectionState.Connected)
-                return;
-
-            if (now - _lastServerReceiveTime >= ServerTimeout)
+            if (_state !=
+                ClientConnectionState.Connected)
             {
-                TimeOut("Server connection timed out.");
                 return;
             }
 
-            if (now - _lastSendTime >= HeartbeatInterval)
+            if (now - _lastServerReceiveTime >=
+                ServerTimeout)
+            {
+                TimeOut(
+                    "Server connection timed out.");
+
+                return;
+            }
+
+            if (now - _lastSendTime >=
+                HeartbeatInterval)
+            {
                 SendHeartbeat(now);
+            }
         }
 
         public void Disconnect()
@@ -110,7 +179,8 @@ namespace Networking
             if (_disposed)
                 return;
 
-            if (_state == ClientConnectionState.Connected)
+            if (_state ==
+                ClientConnectionState.Connected)
             {
                 SendMessage(
                     NetworkMessageType.Disconnect,
@@ -122,7 +192,9 @@ namespace Networking
             }
 
             _transport.Stop();
-            SetState(ClientConnectionState.Stopped);
+
+            SetState(
+                ClientConnectionState.Stopped);
         }
 
         public void Dispose()
@@ -132,29 +204,49 @@ namespace Networking
 
             Disconnect();
             _transport.Dispose();
+
             _disposed = true;
         }
 
-        private void HandleDatagram(byte[] data, double now)
+        private void HandleDatagram(
+            byte[] data,
+            double now)
         {
             if (!NetworkProtocol.TryDecode(
                     data,
                     out NetworkMessageType type,
                     out PacketReader payload))
+            {
                 return;
+            }
 
             try
             {
                 switch (type)
                 {
                     case NetworkMessageType.ServerAccept:
-                        HandleServerAccept(payload, now);
+                        HandleServerAccept(
+                            payload,
+                            now);
                         break;
+
                     case NetworkMessageType.ServerReady:
-                        HandleServerReady(payload, now);
+                        HandleServerReady(
+                            payload,
+                            now);
                         break;
+
                     case NetworkMessageType.HeartbeatAck:
-                        HandleHeartbeatAck(payload, now);
+                        HandleHeartbeatAck(
+                            payload,
+                            now);
+                        break;
+
+                    case NetworkMessageType.ObjectSpawn:
+                    case NetworkMessageType.ObjectDespawn:
+                        HandleApplicationMessage(
+                            type,
+                            payload);
                         break;
                 }
             }
@@ -164,52 +256,114 @@ namespace Networking
             }
         }
 
-        private void HandleServerAccept(PacketReader payload, double now)
+        private void HandleApplicationMessage(
+            NetworkMessageType type,
+            PacketReader payload)
         {
-            const int expectedSize = sizeof(ulong) + sizeof(uint) + sizeof(ulong);
+            if (_state !=
+                    ClientConnectionState.SendingReady &&
+                _state !=
+                    ClientConnectionState.Connected)
+            {
+                return;
+            }
+
+            byte[] data =
+                payload.ReadBytes(
+                    payload.Remaining);
+
+            MessageReceived?.Invoke(
+                type,
+                data);
+        }
+
+        private void HandleServerAccept(
+            PacketReader payload,
+            double now)
+        {
+            const int expectedSize =
+                sizeof(ulong) +
+                sizeof(uint) +
+                sizeof(ulong);
+
             if (payload.Remaining != expectedSize ||
-                (_state != ClientConnectionState.SendingHello &&
-                 _state != ClientConnectionState.SendingReady))
+                (_state !=
+                     ClientConnectionState.SendingHello &&
+                 _state !=
+                     ClientConnectionState.SendingReady))
+            {
                 return;
+            }
 
-            ulong nonce = payload.ReadUInt64();
-            uint peerId = payload.ReadUInt32();
-            ulong token = payload.ReadUInt64();
+            ulong nonce =
+                payload.ReadUInt64();
 
-            if (nonce != _clientNonce || peerId == 0 || token == 0)
+            uint peerId =
+                payload.ReadUInt32();
+
+            ulong token =
+                payload.ReadUInt64();
+
+            if (nonce != _clientNonce ||
+                peerId == 0 ||
+                token == 0)
+            {
                 return;
+            }
 
-            if (_state == ClientConnectionState.SendingReady &&
-                (_peerId != peerId || _sessionToken != token))
+            if (_state ==
+                    ClientConnectionState.SendingReady &&
+                (_peerId != peerId ||
+                 _sessionToken != token))
+            {
                 return;
+            }
 
             _peerId = peerId;
             _sessionToken = token;
             _lastServerReceiveTime = now;
-            SetState(ClientConnectionState.SendingReady);
+
+            SetState(
+                ClientConnectionState.SendingReady);
+
             SendReady(now);
         }
 
-        private void HandleServerReady(PacketReader payload, double now)
+        private void HandleServerReady(
+            PacketReader payload,
+            double now)
         {
             if (payload.Remaining != sizeof(uint) ||
-                (_state != ClientConnectionState.SendingReady &&
-                 _state != ClientConnectionState.Connected))
+                (_state !=
+                     ClientConnectionState.SendingReady &&
+                 _state !=
+                     ClientConnectionState.Connected))
+            {
                 return;
+            }
 
-            uint peerId = payload.ReadUInt32();
+            uint peerId =
+                payload.ReadUInt32();
+
             if (peerId != _peerId)
                 return;
 
             _lastServerReceiveTime = now;
-            SetState(ClientConnectionState.Connected);
+
+            SetState(
+                ClientConnectionState.Connected);
         }
 
-        private void HandleHeartbeatAck(PacketReader payload, double now)
+        private void HandleHeartbeatAck(
+            PacketReader payload,
+            double now)
         {
             if (payload.Remaining != sizeof(uint) ||
-                _state != ClientConnectionState.Connected)
+                _state !=
+                ClientConnectionState.Connected)
+            {
                 return;
+            }
 
             if (payload.ReadUInt32() == _peerId)
                 _lastServerReceiveTime = now;
@@ -219,7 +373,9 @@ namespace Networking
         {
             SendMessage(
                 NetworkMessageType.ClientHello,
-                writer => writer.Write(_clientNonce));
+                writer =>
+                    writer.Write(_clientNonce));
+
             _lastSendTime = now;
         }
 
@@ -232,6 +388,7 @@ namespace Networking
                     writer.Write(_peerId);
                     writer.Write(_sessionToken);
                 });
+
             _lastSendTime = now;
         }
 
@@ -244,6 +401,7 @@ namespace Networking
                     writer.Write(_peerId);
                     writer.Write(_sessionToken);
                 });
+
             _lastSendTime = now;
         }
 
@@ -251,19 +409,33 @@ namespace Networking
             NetworkMessageType type,
             Action<PacketWriter> writePayload)
         {
-            byte[] data = NetworkProtocol.Encode(type, writePayload);
-            if (!_transport.Send(_server, data))
-                Error?.Invoke($"Could not queue {type} message for sending.");
+            byte[] data =
+                NetworkProtocol.Encode(
+                    type,
+                    writePayload);
+
+            if (!_transport.Send(
+                    _server,
+                    data))
+            {
+                Error?.Invoke(
+                    $"Could not queue {type} " +
+                    "message for sending.");
+            }
         }
 
         private void TimeOut(string reason)
         {
             Error?.Invoke(reason);
+
             _transport.Stop();
-            SetState(ClientConnectionState.TimedOut);
+
+            SetState(
+                ClientConnectionState.TimedOut);
         }
 
-        private void SetState(ClientConnectionState state)
+        private void SetState(
+            ClientConnectionState state)
         {
             if (_state == state)
                 return;
@@ -275,20 +447,31 @@ namespace Networking
         private void ThrowIfDisposed()
         {
             if (_disposed)
-                throw new ObjectDisposedException(nameof(GameClient));
+            {
+                throw new ObjectDisposedException(
+                    nameof(GameClient));
+            }
         }
 
         private static ulong CreateRandomUInt64()
         {
-            byte[] bytes = new byte[sizeof(ulong)];
+            byte[] bytes =
+                new byte[sizeof(ulong)];
+
             ulong value;
 
-            using (RandomNumberGenerator random = RandomNumberGenerator.Create())
+            using (
+                RandomNumberGenerator random =
+                    RandomNumberGenerator.Create())
             {
                 do
                 {
                     random.GetBytes(bytes);
-                    value = BitConverter.ToUInt64(bytes, 0);
+
+                    value =
+                        BitConverter.ToUInt64(
+                            bytes,
+                            0);
                 }
                 while (value == 0);
             }

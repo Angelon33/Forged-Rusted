@@ -77,6 +77,57 @@ namespace Networking
             _disposed = true;
         }
 
+        public bool Send(
+            Peer peer,
+            NetworkMessageType type,
+            Action<PacketWriter> writePayload)
+        {
+            if (peer == null ||
+                peer.State != ServerPeerState.Connected ||
+                !_peersById.TryGetValue(
+                    peer.Id,
+                    out Peer registered) ||
+                !ReferenceEquals(peer, registered))
+            {
+                return false;
+            }
+
+            return SendMessage(
+                peer.Handle,
+                type,
+                writePayload);
+        }
+
+        public void Broadcast(
+            NetworkMessageType type,
+            Action<PacketWriter> writePayload)
+        {
+            byte[] data =
+                NetworkProtocol.Encode(
+                    type,
+                    writePayload);
+
+            foreach (Peer peer in _peersById.Values)
+            {
+                if (peer.State !=
+                    ServerPeerState.Connected)
+                {
+                    continue;
+                }
+
+                if (!_transport.Send(
+                        peer.Handle,
+                        data))
+                {
+                    Error?.Invoke(
+                        $"Could not queue {type} " +
+                        $"message for peer {peer.Id}.");
+                }
+            }
+        }
+
+        
+
         private void HandleDatagram(ITransportHandle remote, byte[] data, double now)
         {
             if (remote == null ||
@@ -157,25 +208,48 @@ namespace Networking
             PacketReader payload,
             double now)
         {
-            if (payload.Remaining != sizeof(uint) + sizeof(ulong))
-                return;
-
-            uint peerId = payload.ReadUInt32();
-            ulong token = payload.ReadUInt64();
-            if (!TryAuthenticate(remote, peerId, token, out Peer peer))
-                return;
-
-            peer.LastReceiveTime = now;
-            if (peer.State != ServerPeerState.Connected)
+            if (payload.Remaining !=
+                sizeof(uint) + sizeof(ulong))
             {
-                peer.State = ServerPeerState.Connected;
-                PeerConnected?.Invoke(peer);
+                return;
             }
 
+            uint peerId =
+                payload.ReadUInt32();
+
+            ulong token =
+                payload.ReadUInt64();
+
+            if (!TryAuthenticate(
+                    remote,
+                    peerId,
+                    token,
+                    out Peer peer))
+            {
+                return;
+            }
+
+            peer.LastReceiveTime = now;
+
+            bool becameConnected =
+                peer.State !=
+                ServerPeerState.Connected;
+
+            if (becameConnected)
+            {
+                peer.State =
+                    ServerPeerState.Connected;
+            }
+
+            // Queue ServerReady before object roster messages.
             SendMessage(
                 peer.Handle,
                 NetworkMessageType.ServerReady,
-                writer => writer.Write(peer.Id));
+                writer =>
+                    writer.Write(peer.Id));
+
+            if (becameConnected)
+                PeerConnected?.Invoke(peer);
         }
 
         private void HandleHeartbeat(
@@ -240,14 +314,29 @@ namespace Networking
                 });
         }
 
-        private void SendMessage(
+        private bool SendMessage(
             ITransportHandle destination,
             NetworkMessageType type,
             Action<PacketWriter> writePayload)
         {
-            byte[] data = NetworkProtocol.Encode(type, writePayload);
-            if (!_transport.Send(destination, data))
-                Error?.Invoke($"Could not queue {type} message for sending.");
+            byte[] data =
+                NetworkProtocol.Encode(
+                    type,
+                    writePayload);
+
+            bool sent =
+                _transport.Send(
+                    destination,
+                    data);
+
+            if (!sent)
+            {
+                Error?.Invoke(
+                    $"Could not queue {type} " +
+                    "message for sending.");
+            }
+
+            return sent;
         }
 
         private void RemoveTimedOutPeers(double now)

@@ -8,6 +8,9 @@ namespace Networking
         ServerReady = 4,
         Heartbeat = 5,
         HeartbeatAck = 6,
-        Disconnect = 7
+        Disconnect = 7,
+
+        ObjectSpawn = 8,
+        ObjectDespawn = 9
     }
 }

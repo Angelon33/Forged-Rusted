@@ -17,6 +17,10 @@ namespace Networking
         [SerializeField]
         private bool startAutomatically = true;
 
+        [Header("Execution")]
+        [SerializeField]
+        private bool runInBackground = true;
+
         [SerializeField]
         private NetworkMode launchMode =
             NetworkMode.ListenServer;
@@ -92,6 +96,8 @@ namespace Networking
             }
 
             Current = this;
+
+            Application.runInBackground = runInBackground;
 
             if (world == null)
                 world = GetComponent<NetworkWorld>();
@@ -255,8 +261,15 @@ namespace Networking
 
             SubscribeClient();
 
+            var replication =
+                new ClientReplication(
+                    _client,
+                    world);
+
             _modules.Add(
-                new ClientNetworkModule(_client));
+                new ClientNetworkModule(
+                    _client,
+                    replication));
 
             _client.Connect(
                 address,
@@ -273,8 +286,15 @@ namespace Networking
 
             SubscribeServer();
 
+            var replication =
+                new ServerReplication(
+                    _server,
+                    world);
+
             _modules.Add(
-                new ServerNetworkModule(_server));
+                new ServerNetworkModule(
+                    _server,
+                    replication));
 
             _server.Start(serverPort);
 
@@ -300,8 +320,15 @@ namespace Networking
 
             SubscribeServer();
 
+            var serverReplication =
+                new ServerReplication(
+                    _server,
+                    world);
+
             _modules.Add(
-                new ServerNetworkModule(_server));
+                new ServerNetworkModule(
+                    _server,
+                    serverReplication));
 
             _server.Start(serverPort);
 
@@ -310,8 +337,15 @@ namespace Networking
 
             SubscribeClient();
 
+            var clientReplication =
+                new ClientReplication(
+                    _client,
+                    world);
+
             _modules.Add(
-                new ClientNetworkModule(_client));
+                new ClientNetworkModule(
+                    _client,
+                    clientReplication));
 
             _client.Connect(
                 "loopback",

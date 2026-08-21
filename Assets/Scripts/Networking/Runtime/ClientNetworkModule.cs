@@ -6,13 +6,21 @@ namespace Networking
         : INetworkModule
     {
         private readonly GameClient _client;
+        private readonly ClientReplication _replication;
+
         private bool _disposed;
 
-        public ClientNetworkModule(GameClient client)
+        public ClientNetworkModule(
+            GameClient client,
+            ClientReplication replication)
         {
             _client = client ??
                 throw new ArgumentNullException(
                     nameof(client));
+
+            _replication = replication ??
+                throw new ArgumentNullException(
+                    nameof(replication));
         }
 
         public void Tick(
@@ -23,6 +31,9 @@ namespace Networking
                 return;
 
             _client.Update(now);
+
+            // Snapshot interpolation
+            // will be added here later.
         }
 
         public void Dispose()
@@ -31,6 +42,8 @@ namespace Networking
                 return;
 
             _disposed = true;
+
+            _replication.Dispose();
             _client.Dispose();
         }
     }
