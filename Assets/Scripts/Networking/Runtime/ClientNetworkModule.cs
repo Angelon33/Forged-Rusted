@@ -5,9 +5,18 @@ namespace Networking
     public sealed class ClientNetworkModule
         : INetworkModule
     {
-        private readonly GameClient _client;
-        private readonly ClientReplication _replication;
+        private const double TickInterval =
+            1.0 / 33.0;
 
+        private const int MaximumTicksPerFrame = 5;
+        private const double MaximumFrameTime = 0.25;
+
+        private readonly GameClient _client;
+
+        private readonly ClientReplication
+            _replication;
+
+        private double _accumulator;
         private bool _disposed;
 
         public ClientNetworkModule(
@@ -32,8 +41,32 @@ namespace Networking
 
             _client.Update(now);
 
-            // Snapshot interpolation
-            // will be added here later.
+            float frameDelta =
+                (float)Math.Min(
+                    Math.Max(deltaTime, 0.0),
+                    MaximumFrameTime);
+
+            // Remote visuals interpolate every rendered frame.
+            _replication.Interpolate(frameDelta);
+
+            _accumulator += frameDelta;
+
+            int ticks = 0;
+
+            while (_accumulator >= TickInterval &&
+                   ticks < MaximumTicksPerFrame)
+            {
+                _replication.SendInput();
+
+                _accumulator -= TickInterval;
+                ticks++;
+            }
+
+            if (ticks == MaximumTicksPerFrame &&
+                _accumulator >= TickInterval)
+            {
+                _accumulator = 0.0;
+            }
         }
 
         public void Dispose()

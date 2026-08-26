@@ -1,12 +1,27 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace Networking
 {
     public sealed class ServerReplication : IDisposable
     {
+        // A player now produces both a Transform entry and a
+        // CharacterMotor entry. Fourteen fully populated players
+        // still fit below the current maximum packet size.
+        private const int MaximumObjectsPerSnapshot = 14;
+
         private readonly GameServer _server;
         private readonly NetworkWorld _world;
+
+        private readonly Dictionary<uint, PlayerState>
+            _playersByPeer =
+                new Dictionary<uint, PlayerState>();
+
+        private readonly List<NetObject>
+            _snapshotObjects =
+                new List<NetObject>(
+                    MaximumObjectsPerSnapshot);
 
         private bool _disposed;
 
@@ -25,11 +40,31 @@ namespace Networking
             _server.PeerConnected +=
                 OnPeerConnected;
 
+            _server.PeerDisconnected +=
+                OnPeerDisconnected;
+
+            _server.MessageReceived +=
+                OnMessageReceived;
+
             _world.ObjectSpawned +=
                 OnObjectSpawned;
 
             _world.ObjectDespawned +=
                 OnObjectDespawned;
+
+            foreach (NetObject netObject in _world.Objects)
+                RegisterPlayer(netObject);
+        }
+
+        public void Tick(
+            uint serverTick,
+            float deltaTime)
+        {
+            if (_disposed)
+                return;
+
+            SimulatePlayers(deltaTime);
+            SendWorldSnapshot(serverTick);
         }
 
         public void Dispose()
@@ -42,46 +77,266 @@ namespace Networking
             _server.PeerConnected -=
                 OnPeerConnected;
 
+            _server.PeerDisconnected -=
+                OnPeerDisconnected;
+
+            _server.MessageReceived -=
+                OnMessageReceived;
+
             _world.ObjectSpawned -=
                 OnObjectSpawned;
 
             _world.ObjectDespawned -=
                 OnObjectDespawned;
+
+            _playersByPeer.Clear();
+            _snapshotObjects.Clear();
         }
 
         private void OnPeerConnected(Peer peer)
         {
-            // Send the complete existing roster
-            // to the newly connected peer.
-            foreach (NetObject netObject
-                     in _world.Objects)
-            {
-                SendSpawn(
-                    peer,
-                    netObject);
-            }
+            foreach (NetObject netObject in _world.Objects)
+                SendSpawn(peer, netObject);
+        }
+
+        private void OnPeerDisconnected(uint peerId)
+        {
+            _playersByPeer.Remove(peerId);
         }
 
         private void OnObjectSpawned(
             NetObject netObject)
         {
+            RegisterPlayer(netObject);
+
             _server.Broadcast(
                 NetworkMessageType.ObjectSpawn,
                 writer =>
-                    WriteSpawn(
-                        writer,
-                        netObject),
+                    WriteSpawn(writer, netObject),
                 NetworkDelivery.ReliableOrdered);
         }
 
         private void OnObjectDespawned(
             uint networkId)
         {
+            uint ownerToRemove = 0;
+
+            foreach (
+                KeyValuePair<uint, PlayerState> entry
+                in _playersByPeer)
+            {
+                if (entry.Value.NetworkId ==
+                    networkId)
+                {
+                    ownerToRemove = entry.Key;
+                    break;
+                }
+            }
+
+            if (ownerToRemove != 0)
+                _playersByPeer.Remove(ownerToRemove);
+
             _server.Broadcast(
                 NetworkMessageType.ObjectDespawn,
                 writer =>
                     writer.Write(networkId),
                 NetworkDelivery.ReliableOrdered);
+        }
+
+        private void RegisterPlayer(
+            NetObject netObject)
+        {
+            if (netObject == null ||
+                netObject.OwnerPeerId == 0 ||
+                !netObject.TryGetComponent(
+                    out CharacterMotor motor) ||
+                !netObject.TryGetBehaviour(
+                    NetComponentType.CharacterMotor,
+                    out NetBehaviour behaviour) ||
+                !(behaviour is
+                    NetCharacterMotor networkMotor))
+            {
+                return;
+            }
+
+            motor.SetSimulationEnabled(true);
+
+            var initialMessage =
+                new PlayerInputMessage(
+                    netObject.NetworkId,
+                    0,
+                    Vector2.zero,
+                    netObject.transform.eulerAngles.y,
+                    PlayerInputButtons.None);
+
+            _playersByPeer[netObject.OwnerPeerId] =
+                new PlayerState(
+                    netObject.NetworkId,
+                    motor,
+                    networkMotor,
+                    initialMessage);
+        }
+
+        private void OnMessageReceived(
+            Peer peer,
+            NetworkMessageType type,
+            byte[] data)
+        {
+            if (type !=
+                    NetworkMessageType.PlayerInput ||
+                !PlayerInputMessage.TryRead(
+                    data,
+                    out PlayerInputMessage Message) ||
+                !_playersByPeer.TryGetValue(
+                    peer.Id,
+                    out PlayerState state) ||
+                Message.NetworkId !=
+                    state.NetworkId)
+            {
+                return;
+            }
+
+            if (state.HasReceivedInput &&
+                !IsNewer(
+                    Message.InputSequence,
+                    state.LatestInputSequence))
+            {
+                return;
+            }
+
+            state.HasReceivedInput = true;
+
+            state.LatestInputSequence =
+                Message.InputSequence;
+
+            state.Message = Message;
+        }
+
+        private void SimulatePlayers(
+            float deltaTime)
+        {
+            foreach (
+                PlayerState state
+                in _playersByPeer.Values)
+            {
+                if (state.Motor == null)
+                    continue;
+
+                state.Motor.Simulate(
+                    state.Message,
+                    deltaTime);
+
+                if (state.HasReceivedInput)
+                {
+                    state.NetworkMotor
+                        .SetLastProcessedInputSequence(
+                            state.LatestInputSequence);
+                }
+
+                // Jump represents a pressed edge. Sprint and
+                // crouch remain active until input changes.
+                state.Message =
+                    state.Message.WithoutJump();
+            }
+        }
+
+        private void SendWorldSnapshot(
+            uint serverTick)
+        {
+            _snapshotObjects.Clear();
+
+            foreach (NetObject netObject in _world.Objects)
+            {
+                if (netObject == null ||
+                    _snapshotObjects.Count >=
+                        MaximumObjectsPerSnapshot ||
+                    !netObject.TryGetBehaviour(
+                        NetComponentType.Transform,
+                        out _))
+                {
+                    continue;
+                }
+
+                _snapshotObjects.Add(netObject);
+            }
+
+            _server.Broadcast(
+                NetworkMessageType.WorldSnapshot,
+                writer =>
+                {
+                    writer.Write(serverTick);
+
+                    int entryCount = 0;
+
+                    for (int index = 0;
+                         index < _snapshotObjects.Count;
+                         index++)
+                    {
+                        NetObject netObject =
+                            _snapshotObjects[index];
+
+                        // Every selected object has a transform.
+                        entryCount++;
+
+                        if (netObject.TryGetBehaviour(
+                                NetComponentType.CharacterMotor,
+                                out _))
+                        {
+                            entryCount++;
+                        }
+                    }
+
+                    writer.Write(
+                        (ushort)entryCount);
+
+                    for (int index = 0;
+                         index < _snapshotObjects.Count;
+                         index++)
+                    {
+                        NetObject netObject =
+                            _snapshotObjects[index];
+
+                        netObject.TryGetBehaviour(
+                            NetComponentType.Transform,
+                            out NetBehaviour transformBehaviour);
+
+                        WriteStateEntry(
+                            writer,
+                            netObject.NetworkId,
+                            transformBehaviour);
+
+                        if (netObject.TryGetBehaviour(
+                                NetComponentType.CharacterMotor,
+                                out NetBehaviour characterBehaviour))
+                        {
+                            WriteStateEntry(
+                                writer,
+                                netObject.NetworkId,
+                                characterBehaviour);
+                        }
+                    }
+                },
+                NetworkDelivery.UnreliableSequenced);
+        }
+
+        private static void WriteStateEntry(
+            PacketWriter writer,
+            uint networkId,
+            NetBehaviour behaviour)
+        {
+            var stateWriter =
+                new PacketWriter();
+
+            behaviour.WriteState(
+                stateWriter);
+
+            byte[] state =
+                stateWriter.ToArray();
+
+            writer.Write(networkId);
+            writer.Write((byte)behaviour.ComponentType);
+            writer.Write((ushort)state.Length);
+            writer.Write(state);
         }
 
         private void SendSpawn(
@@ -92,9 +347,7 @@ namespace Networking
                 peer,
                 NetworkMessageType.ObjectSpawn,
                 writer =>
-                    WriteSpawn(
-                        writer,
-                        netObject),
+                    WriteSpawn(writer, netObject),
                 NetworkDelivery.ReliableOrdered);
         }
 
@@ -123,6 +376,57 @@ namespace Networking
             writer.Write(rotation.y);
             writer.Write(rotation.z);
             writer.Write(rotation.w);
+        }
+
+        private static bool IsNewer(
+            uint candidate,
+            uint reference)
+        {
+            return candidate != reference &&
+                   unchecked(
+                       (int)(candidate - reference)) > 0;
+        }
+
+        private sealed class PlayerState
+        {
+            public uint NetworkId { get; }
+
+            public CharacterMotor Motor { get; }
+
+            public NetCharacterMotor NetworkMotor
+            {
+                get;
+            }
+
+            public PlayerInputMessage Message
+            {
+                get;
+                set;
+            }
+
+            public uint LatestInputSequence
+            {
+                get;
+                set;
+            }
+
+            public bool HasReceivedInput
+            {
+                get;
+                set;
+            }
+
+            public PlayerState(
+                uint networkId,
+                CharacterMotor motor,
+                NetCharacterMotor networkMotor,
+                PlayerInputMessage Message)
+            {
+                NetworkId = networkId;
+                Motor = motor;
+                NetworkMotor = networkMotor;
+                this.Message = Message;
+            }
         }
     }
 }

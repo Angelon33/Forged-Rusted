@@ -46,6 +46,11 @@ namespace Networking
 
         public event Action<string> Error;
 
+        public event Action<
+            Peer,
+            NetworkMessageType,
+            byte[]> MessageReceived;
+
         public GameServer(
             INetworkDeliveryTransport transport)
         {
@@ -230,6 +235,13 @@ namespace Networking
                         HandleDisconnect(
                             remote,
                             payload);
+                        break;
+
+                    case NetworkMessageType.PlayerInput:
+                        HandleApplicationMessage(
+                            remote,
+                            type,
+                            data);
                         break;
                 }
             }
@@ -429,6 +441,26 @@ namespace Networking
                     peer.State ==
                         ServerPeerState.Connected);
             }
+        }
+
+        private void HandleApplicationMessage(
+            ITransportHandle remote,
+            NetworkMessageType type,
+            byte[] data)
+        {
+            if (!_peersByHandle.TryGetValue(
+                    remote,
+                    out Peer peer) ||
+                peer.State !=
+                    ServerPeerState.Connected)
+            {
+                return;
+            }
+
+            MessageReceived?.Invoke(
+                peer,
+                type,
+                data);
         }
 
         private bool TryAuthenticate(

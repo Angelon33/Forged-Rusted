@@ -270,6 +270,7 @@ namespace Networking
 
                     case NetworkMessageType.ObjectSpawn:
                     case NetworkMessageType.ObjectDespawn:
+                    case NetworkMessageType.WorldSnapshot:
                         HandleApplicationMessage(
                             type,
                             data);

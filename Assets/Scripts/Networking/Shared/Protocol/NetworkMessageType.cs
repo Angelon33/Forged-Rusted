@@ -11,6 +11,9 @@ namespace Networking
         Disconnect = 7,
 
         ObjectSpawn = 8,
-        ObjectDespawn = 9
+        ObjectDespawn = 9,
+
+        PlayerInput = 10,
+        WorldSnapshot = 11
     }
 }
