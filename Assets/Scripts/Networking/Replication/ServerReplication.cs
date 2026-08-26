@@ -70,7 +70,8 @@ namespace Networking
                 writer =>
                     WriteSpawn(
                         writer,
-                        netObject));
+                        netObject),
+                NetworkDelivery.ReliableOrdered);
         }
 
         private void OnObjectDespawned(
@@ -79,7 +80,8 @@ namespace Networking
             _server.Broadcast(
                 NetworkMessageType.ObjectDespawn,
                 writer =>
-                    writer.Write(networkId));
+                    writer.Write(networkId),
+                NetworkDelivery.ReliableOrdered);
         }
 
         private void SendSpawn(
@@ -92,7 +94,8 @@ namespace Networking
                 writer =>
                     WriteSpawn(
                         writer,
-                        netObject));
+                        netObject),
+                NetworkDelivery.ReliableOrdered);
         }
 
         private static void WriteSpawn(

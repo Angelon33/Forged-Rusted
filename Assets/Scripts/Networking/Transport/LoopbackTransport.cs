@@ -67,7 +67,7 @@ namespace Networking
         {
             if (data == null ||
                 data.Length == 0 ||
-                data.Length > NetworkProtocol.MaximumDatagramSize ||
+                data.Length > NetworkTransportLimits.MaximumDatagramSize ||
                 !ReferenceEquals(
                     destination,
                     _partner._localHandle))

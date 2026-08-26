@@ -13,7 +13,8 @@ namespace Networking
             sizeof(byte) +
             sizeof(ushort);
 
-        public const int MaximumDatagramSize = 1200;
+        public const int MaximumDatagramSize =
+            NetworkTransportLimits.MaximumApplicationDatagramSize;
 
         public static byte[] Encode(
             NetworkMessageType type,

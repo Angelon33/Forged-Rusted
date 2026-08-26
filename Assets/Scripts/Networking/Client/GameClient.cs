@@ -11,7 +11,7 @@ namespace Networking
         private const double ServerTimeout = 15.0;
         private const int MaximumEventsPerUpdate = 256;
 
-        private readonly INetworkTransport _transport;
+        private readonly INetworkDeliveryTransport _transport;
 
         private ITransportHandle _server;
 
@@ -44,7 +44,7 @@ namespace Networking
             MessageReceived;
 
         public GameClient(
-            INetworkTransport transport)
+            INetworkDeliveryTransport transport)
         {
             _transport = transport ??
                 throw new ArgumentNullException(
@@ -70,6 +70,8 @@ namespace Networking
                     address,
                     port);
 
+            _transport.RegisterRemote(_server);
+
             _clientNonce =
                 CreateRandomUInt64();
 
@@ -90,6 +92,8 @@ namespace Networking
             {
                 return;
             }
+
+            _transport.Update(now);
 
             int processed = 0;
 
@@ -206,6 +210,24 @@ namespace Networking
             _transport.Dispose();
 
             _disposed = true;
+        }
+
+        public bool Send(
+            NetworkMessageType type,
+            Action<PacketWriter> writePayload,
+            NetworkDelivery delivery =
+            NetworkDelivery.Unreliable)
+        {
+            if (_disposed ||
+                _state != ClientConnectionState.Connected)
+            {
+                return false;
+            }
+
+            return SendMessage(
+                type,
+                writePayload,
+                delivery);
         }
 
         private void HandleDatagram(
@@ -405,9 +427,11 @@ namespace Networking
             _lastSendTime = now;
         }
 
-        private void SendMessage(
+        private bool SendMessage(
             NetworkMessageType type,
-            Action<PacketWriter> writePayload)
+            Action<PacketWriter> writePayload,
+            NetworkDelivery delivery =
+                NetworkDelivery.Unreliable)
         {
             byte[] data =
                 NetworkProtocol.Encode(
@@ -416,12 +440,17 @@ namespace Networking
 
             if (!_transport.Send(
                     _server,
-                    data))
+                    data,
+                    delivery))
             {
                 Error?.Invoke(
                     $"Could not queue {type} " +
                     "message for sending.");
+
+                return false;
             }
+
+            return true;
         }
 
         private void TimeOut(string reason)

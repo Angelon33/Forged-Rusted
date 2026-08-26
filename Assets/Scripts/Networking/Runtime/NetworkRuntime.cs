@@ -257,7 +257,8 @@ namespace Networking
         {
             _client =
                 new GameClient(
-                    new UdpTransport());
+                    new DeliveryTransport(
+                        new UdpTransport()));
 
             SubscribeClient();
 
@@ -282,7 +283,8 @@ namespace Networking
         {
             _server =
                 new GameServer(
-                    new UdpTransport());
+                    new DeliveryTransport(
+                        new UdpTransport()));
 
             SubscribeServer();
 
@@ -316,7 +318,9 @@ namespace Networking
                     serverLoopback);
 
             _server =
-                new GameServer(serverTransport);
+                new GameServer(
+                    new DeliveryTransport(
+                        serverTransport));
 
             SubscribeServer();
 
@@ -333,7 +337,9 @@ namespace Networking
             _server.Start(serverPort);
 
             _client =
-                new GameClient(clientLoopback);
+                new GameClient(
+                    new DeliveryTransport(
+                        clientLoopback));
 
             SubscribeClient();
 

@@ -60,7 +60,7 @@ namespace Networking
                 !(destination is UdpTransportHandle udp) ||
                 data == null ||
                 data.Length == 0 ||
-                data.Length > NetworkProtocol.MaximumDatagramSize)
+                data.Length > NetworkTransportLimits.MaximumDatagramSize)
             {
                 return false;
             }
@@ -196,7 +196,7 @@ namespace Networking
 
             if (data == null ||
                 data.Length == 0 ||
-                data.Length > NetworkProtocol.MaximumDatagramSize)
+                data.Length > NetworkTransportLimits.MaximumDatagramSize)
                 return;
 
             QueueIncoming(TransportEvent.DataReceived(

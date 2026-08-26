@@ -14,7 +14,7 @@ namespace Networking
         private readonly Dictionary<ITransportHandle, Peer> _peersByHandle = new();
         private readonly Dictionary<uint, Peer> _peersById = new();
         private readonly List<Peer> _timedOutPeers = new();
-        private readonly INetworkTransport _transport;
+        private readonly INetworkDeliveryTransport _transport;
         private uint _nextPeerId = 1;
         private bool _started;
         private bool _disposed;
@@ -26,9 +26,12 @@ namespace Networking
         public event Action<uint> PeerDisconnected;
         public event Action<string> Error;
 
-        public GameServer(INetworkTransport transport)
+        public GameServer(
+            INetworkDeliveryTransport transport)
         {
-            _transport = transport ?? throw new ArgumentNullException(nameof(transport));
+            _transport = transport ??
+                throw new ArgumentNullException(
+                    nameof(transport));
         }
 
         public void Start(ushort port)
@@ -45,7 +48,11 @@ namespace Networking
         public void Update(double now)
         {
             if (!_started || _disposed)
+            {
                 return;
+            }
+
+            _transport.Update(now);
 
             int processed = 0;
             while (processed < MaximumEventsPerUpdate &&
@@ -80,7 +87,9 @@ namespace Networking
         public bool Send(
             Peer peer,
             NetworkMessageType type,
-            Action<PacketWriter> writePayload)
+            Action<PacketWriter> writePayload,
+            NetworkDelivery delivery =
+                NetworkDelivery.Unreliable)
         {
             if (peer == null ||
                 peer.State != ServerPeerState.Connected ||
@@ -95,12 +104,15 @@ namespace Networking
             return SendMessage(
                 peer.Handle,
                 type,
-                writePayload);
+                writePayload,
+                delivery);
         }
 
         public void Broadcast(
             NetworkMessageType type,
-            Action<PacketWriter> writePayload)
+            Action<PacketWriter> writePayload,
+            NetworkDelivery delivery =
+                NetworkDelivery.Unreliable)
         {
             byte[] data =
                 NetworkProtocol.Encode(
@@ -117,7 +129,8 @@ namespace Networking
 
                 if (!_transport.Send(
                         peer.Handle,
-                        data))
+                        data,
+                        delivery))
                 {
                     Error?.Invoke(
                         $"Could not queue {type} " +
@@ -200,6 +213,9 @@ namespace Networking
 
             _peersByHandle.Add(remote, peer);
             _peersById.Add(peer.Id, peer);
+
+            _transport.RegisterRemote(remote);
+
             SendServerAccept(peer);
         }
 
@@ -235,21 +251,26 @@ namespace Networking
                 peer.State !=
                 ServerPeerState.Connected;
 
+            // This is sequence zero on the reliable stream.
+            // Spawn messages will be queued after it.
+            bool readyQueued =
+                SendMessage(
+                    peer.Handle,
+                    NetworkMessageType.ServerReady,
+                    writer =>
+                        writer.Write(peer.Id),
+                    NetworkDelivery.ReliableOrdered);
+
+            if (!readyQueued)
+                return;
+
             if (becameConnected)
             {
                 peer.State =
                     ServerPeerState.Connected;
-            }
 
-            // Queue ServerReady before object roster messages.
-            SendMessage(
-                peer.Handle,
-                NetworkMessageType.ServerReady,
-                writer =>
-                    writer.Write(peer.Id));
-
-            if (becameConnected)
                 PeerConnected?.Invoke(peer);
+            }
         }
 
         private void HandleHeartbeat(
@@ -317,7 +338,9 @@ namespace Networking
         private bool SendMessage(
             ITransportHandle destination,
             NetworkMessageType type,
-            Action<PacketWriter> writePayload)
+            Action<PacketWriter> writePayload,
+            NetworkDelivery delivery =
+                NetworkDelivery.Unreliable)
         {
             byte[] data =
                 NetworkProtocol.Encode(
@@ -327,7 +350,8 @@ namespace Networking
             bool sent =
                 _transport.Send(
                     destination,
-                    data);
+                    data,
+                    delivery);
 
             if (!sent)
             {
@@ -358,10 +382,15 @@ namespace Networking
             _timedOutPeers.Clear();
         }
 
-        private void RemovePeer(Peer peer, bool notify)
+        private void RemovePeer(
+            Peer peer,
+            bool notify)
         {
             _peersByHandle.Remove(peer.Handle);
             _peersById.Remove(peer.Id);
+
+            _transport.RemoveRemote(peer.Handle);
+
             if (notify)
                 PeerDisconnected?.Invoke(peer.Id);
         }
