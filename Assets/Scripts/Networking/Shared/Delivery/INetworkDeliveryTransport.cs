@@ -18,13 +18,14 @@ namespace Networking
 
         bool Send(
             ITransportHandle destination,
-            byte[] data,
+            NetworkMessageType messageType,
+            byte[] payload,
             NetworkDelivery delivery);
 
         void Update(double now);
 
         bool TryPollEvent(
-            out TransportEvent transportEvent);
+            out DeliveryEvent deliveryEvent);
 
         void Stop();
     }

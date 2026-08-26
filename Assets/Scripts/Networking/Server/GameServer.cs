@@ -11,19 +11,39 @@ namespace Networking
         private const double PendingTimeout = 10.0;
         private const double ConnectedTimeout = 15.0;
 
-        private readonly Dictionary<ITransportHandle, Peer> _peersByHandle = new();
-        private readonly Dictionary<uint, Peer> _peersById = new();
-        private readonly List<Peer> _timedOutPeers = new();
-        private readonly INetworkDeliveryTransport _transport;
+        private readonly Dictionary<
+            ITransportHandle,
+            Peer> _peersByHandle =
+                new Dictionary<
+                    ITransportHandle,
+                    Peer>();
+
+        private readonly Dictionary<
+            uint,
+            Peer> _peersById =
+                new Dictionary<uint, Peer>();
+
+        private readonly List<Peer> _timedOutPeers =
+            new List<Peer>();
+
+        private readonly INetworkDeliveryTransport
+            _transport;
+
         private uint _nextPeerId = 1;
         private bool _started;
         private bool _disposed;
 
-        public bool IsRunning => _started && _transport.IsRunning;
-        public int PeerCount => _peersById.Count;
+        public bool IsRunning =>
+            _started &&
+            _transport.IsRunning;
+
+        public int PeerCount =>
+            _peersById.Count;
 
         public event Action<Peer> PeerConnected;
+
         public event Action<uint> PeerDisconnected;
+
         public event Action<string> Error;
 
         public GameServer(
@@ -39,15 +59,20 @@ namespace Networking
             ThrowIfDisposed();
 
             if (_started)
-                throw new InvalidOperationException("Server is already running.");
+            {
+                throw new InvalidOperationException(
+                    "Server is already running.");
+            }
 
             _transport.StartServer(port);
+
             _started = true;
         }
 
         public void Update(double now)
         {
-            if (!_started || _disposed)
+            if (!_started ||
+                _disposed)
             {
                 return;
             }
@@ -55,17 +80,28 @@ namespace Networking
             _transport.Update(now);
 
             int processed = 0;
-            while (processed < MaximumEventsPerUpdate &&
-                   _transport.TryPollEvent(out TransportEvent transportEvent))
+
+            while (
+                processed < MaximumEventsPerUpdate &&
+                _transport.TryPollEvent(
+                    out DeliveryEvent deliveryEvent))
             {
                 processed++;
-                if (transportEvent.Type == TransportEventType.Error)
+
+                if (deliveryEvent.Type ==
+                    DeliveryEventType.Error)
                 {
-                    Error?.Invoke(transportEvent.Error);
+                    Error?.Invoke(
+                        deliveryEvent.Error);
+
                     continue;
                 }
 
-                HandleDatagram(transportEvent.Remote, transportEvent.Data, now);
+                HandleMessage(
+                    deliveryEvent.Remote,
+                    deliveryEvent.MessageType,
+                    deliveryEvent.Payload,
+                    now);
             }
 
             RemoveTimedOutPeers(now);
@@ -77,10 +113,13 @@ namespace Networking
                 return;
 
             _started = false;
+
             _peersByHandle.Clear();
             _peersById.Clear();
             _timedOutPeers.Clear();
+
             _transport.Dispose();
+
             _disposed = true;
         }
 
@@ -92,11 +131,14 @@ namespace Networking
                 NetworkDelivery.Unreliable)
         {
             if (peer == null ||
-                peer.State != ServerPeerState.Connected ||
+                peer.State !=
+                    ServerPeerState.Connected ||
                 !_peersById.TryGetValue(
                     peer.Id,
                     out Peer registered) ||
-                !ReferenceEquals(peer, registered))
+                !ReferenceEquals(
+                    peer,
+                    registered))
             {
                 return false;
             }
@@ -114,12 +156,16 @@ namespace Networking
             NetworkDelivery delivery =
                 NetworkDelivery.Unreliable)
         {
-            byte[] data =
-                NetworkProtocol.Encode(
-                    type,
-                    writePayload);
+            var writer =
+                new PacketWriter();
 
-            foreach (Peer peer in _peersById.Values)
+            writePayload?.Invoke(writer);
+
+            byte[] payload =
+                writer.ToArray();
+
+            foreach (Peer peer
+                     in _peersById.Values)
             {
                 if (peer.State !=
                     ServerPeerState.Connected)
@@ -129,7 +175,8 @@ namespace Networking
 
                 if (!_transport.Send(
                         peer.Handle,
-                        data,
+                        type,
+                        payload,
                         delivery))
                 {
                     Error?.Invoke(
@@ -139,32 +186,50 @@ namespace Networking
             }
         }
 
-        
-
-        private void HandleDatagram(ITransportHandle remote, byte[] data, double now)
+        private void HandleMessage(
+            ITransportHandle remote,
+            NetworkMessageType type,
+            byte[] data,
+            double now)
         {
             if (remote == null ||
-                !NetworkProtocol.TryDecode(
-                    data,
-                    out NetworkMessageType type,
-                    out PacketReader payload))
+                data == null)
+            {
                 return;
+            }
 
             try
             {
+                var payload =
+                    new PacketReader(data);
+
                 switch (type)
                 {
                     case NetworkMessageType.ClientHello:
-                        HandleClientHello(remote, payload, now);
+                        HandleClientHello(
+                            remote,
+                            payload,
+                            now);
                         break;
+
                     case NetworkMessageType.ClientReady:
-                        HandleClientReady(remote, payload, now);
+                        HandleClientReady(
+                            remote,
+                            payload,
+                            now);
                         break;
+
                     case NetworkMessageType.Heartbeat:
-                        HandleHeartbeat(remote, payload, now);
+                        HandleHeartbeat(
+                            remote,
+                            payload,
+                            now);
                         break;
+
                     case NetworkMessageType.Disconnect:
-                        HandleDisconnect(remote, payload);
+                        HandleDisconnect(
+                            remote,
+                            payload);
                         break;
                 }
             }
@@ -179,40 +244,64 @@ namespace Networking
             PacketReader payload,
             double now)
         {
-            if (payload.Remaining != sizeof(ulong))
+            if (payload.Remaining !=
+                sizeof(ulong))
+            {
                 return;
+            }
 
-            ulong clientNonce = payload.ReadUInt64();
+            ulong clientNonce =
+                payload.ReadUInt64();
+
             if (clientNonce == 0)
                 return;
 
-            if (_peersByHandle.TryGetValue(remote, out Peer existing))
+            if (_peersByHandle.TryGetValue(
+                    remote,
+                    out Peer existing))
             {
-                if (existing.ClientNonce == clientNonce)
+                if (existing.ClientNonce ==
+                    clientNonce)
                 {
                     existing.LastReceiveTime = now;
+
                     SendServerAccept(existing);
+
                     return;
                 }
 
-                if (existing.State == ServerPeerState.Connected)
+                if (existing.State ==
+                    ServerPeerState.Connected)
+                {
                     return;
+                }
 
-                RemovePeer(existing, false);
+                RemovePeer(
+                    existing,
+                    false);
             }
 
-            if (_peersById.Count >= MaximumPeers)
+            if (_peersById.Count >=
+                MaximumPeers)
+            {
                 return;
+            }
 
-            var peer = new Peer(
-                AllocatePeerId(),
-                clientNonce,
-                CreateRandomUInt64(),
+            var peer =
+                new Peer(
+                    AllocatePeerId(),
+                    clientNonce,
+                    CreateRandomUInt64(),
+                    remote,
+                    now);
+
+            _peersByHandle.Add(
                 remote,
-                now);
+                peer);
 
-            _peersByHandle.Add(remote, peer);
-            _peersById.Add(peer.Id, peer);
+            _peersById.Add(
+                peer.Id,
+                peer);
 
             _transport.RegisterRemote(remote);
 
@@ -225,7 +314,8 @@ namespace Networking
             double now)
         {
             if (payload.Remaining !=
-                sizeof(uint) + sizeof(ulong))
+                sizeof(uint) +
+                sizeof(ulong))
             {
                 return;
             }
@@ -251,8 +341,8 @@ namespace Networking
                 peer.State !=
                 ServerPeerState.Connected;
 
-            // This is sequence zero on the reliable stream.
-            // Spawn messages will be queued after it.
+            // This is the first reliable message.
+            // Spawn messages follow it in order.
             bool readyQueued =
                 SendMessage(
                     peer.Handle,
@@ -278,31 +368,67 @@ namespace Networking
             PacketReader payload,
             double now)
         {
-            if (payload.Remaining != sizeof(uint) + sizeof(ulong))
+            if (payload.Remaining !=
+                sizeof(uint) +
+                sizeof(ulong))
+            {
                 return;
+            }
 
-            uint peerId = payload.ReadUInt32();
-            ulong token = payload.ReadUInt64();
-            if (!TryAuthenticate(remote, peerId, token, out Peer peer) ||
-                peer.State != ServerPeerState.Connected)
+            uint peerId =
+                payload.ReadUInt32();
+
+            ulong token =
+                payload.ReadUInt64();
+
+            if (!TryAuthenticate(
+                    remote,
+                    peerId,
+                    token,
+                    out Peer peer) ||
+                peer.State !=
+                    ServerPeerState.Connected)
+            {
                 return;
+            }
 
             peer.LastReceiveTime = now;
+
             SendMessage(
                 peer.Handle,
                 NetworkMessageType.HeartbeatAck,
-                writer => writer.Write(peer.Id));
+                writer =>
+                    writer.Write(peer.Id));
         }
 
-        private void HandleDisconnect(ITransportHandle remote, PacketReader payload)
+        private void HandleDisconnect(
+            ITransportHandle remote,
+            PacketReader payload)
         {
-            if (payload.Remaining != sizeof(uint) + sizeof(ulong))
+            if (payload.Remaining !=
+                sizeof(uint) +
+                sizeof(ulong))
+            {
                 return;
+            }
 
-            uint peerId = payload.ReadUInt32();
-            ulong token = payload.ReadUInt64();
-            if (TryAuthenticate(remote, peerId, token, out Peer peer))
-                RemovePeer(peer, peer.State == ServerPeerState.Connected);
+            uint peerId =
+                payload.ReadUInt32();
+
+            ulong token =
+                payload.ReadUInt64();
+
+            if (TryAuthenticate(
+                    remote,
+                    peerId,
+                    token,
+                    out Peer peer))
+            {
+                RemovePeer(
+                    peer,
+                    peer.State ==
+                        ServerPeerState.Connected);
+            }
         }
 
         private bool TryAuthenticate(
@@ -312,26 +438,42 @@ namespace Networking
             out Peer peer)
         {
             peer = null;
-            if (!_peersByHandle.TryGetValue(remote, out Peer byHandle) ||
-                !_peersById.TryGetValue(peerId, out Peer byId) ||
-                !ReferenceEquals(byHandle, byId) ||
+
+            if (!_peersByHandle.TryGetValue(
+                    remote,
+                    out Peer byHandle) ||
+                !_peersById.TryGetValue(
+                    peerId,
+                    out Peer byId) ||
+                !ReferenceEquals(
+                    byHandle,
+                    byId) ||
                 byHandle.SessionToken != token)
+            {
                 return false;
+            }
 
             peer = byHandle;
+
             return true;
         }
 
-        private void SendServerAccept(Peer peer)
+        private void SendServerAccept(
+            Peer peer)
         {
             SendMessage(
                 peer.Handle,
                 NetworkMessageType.ServerAccept,
                 writer =>
                 {
-                    writer.Write(peer.ClientNonce);
-                    writer.Write(peer.Id);
-                    writer.Write(peer.SessionToken);
+                    writer.Write(
+                        peer.ClientNonce);
+
+                    writer.Write(
+                        peer.Id);
+
+                    writer.Write(
+                        peer.SessionToken);
                 });
         }
 
@@ -342,15 +484,19 @@ namespace Networking
             NetworkDelivery delivery =
                 NetworkDelivery.Unreliable)
         {
-            byte[] data =
-                NetworkProtocol.Encode(
-                    type,
-                    writePayload);
+            var writer =
+                new PacketWriter();
+
+            writePayload?.Invoke(writer);
+
+            byte[] payload =
+                writer.ToArray();
 
             bool sent =
                 _transport.Send(
                     destination,
-                    data,
+                    type,
+                    payload,
                     delivery);
 
             if (!sent)
@@ -363,21 +509,35 @@ namespace Networking
             return sent;
         }
 
-        private void RemoveTimedOutPeers(double now)
+        private void RemoveTimedOutPeers(
+            double now)
         {
             _timedOutPeers.Clear();
-            foreach (Peer peer in _peersById.Values)
-            {
-                double timeout = peer.State == ServerPeerState.Connected
-                    ? ConnectedTimeout
-                    : PendingTimeout;
 
-                if (now - peer.LastReceiveTime >= timeout)
+            foreach (Peer peer
+                     in _peersById.Values)
+            {
+                double timeout =
+                    peer.State ==
+                    ServerPeerState.Connected
+                        ? ConnectedTimeout
+                        : PendingTimeout;
+
+                if (now -
+                    peer.LastReceiveTime >= timeout)
+                {
                     _timedOutPeers.Add(peer);
+                }
             }
 
-            foreach (Peer peer in _timedOutPeers)
-                RemovePeer(peer, peer.State == ServerPeerState.Connected);
+            foreach (Peer peer
+                     in _timedOutPeers)
+            {
+                RemovePeer(
+                    peer,
+                    peer.State ==
+                        ServerPeerState.Connected);
+            }
 
             _timedOutPeers.Clear();
         }
@@ -386,47 +546,73 @@ namespace Networking
             Peer peer,
             bool notify)
         {
-            _peersByHandle.Remove(peer.Handle);
-            _peersById.Remove(peer.Id);
+            _peersByHandle.Remove(
+                peer.Handle);
 
-            _transport.RemoveRemote(peer.Handle);
+            _peersById.Remove(
+                peer.Id);
+
+            _transport.RemoveRemote(
+                peer.Handle);
 
             if (notify)
-                PeerDisconnected?.Invoke(peer.Id);
+            {
+                PeerDisconnected?.Invoke(
+                    peer.Id);
+            }
         }
 
         private uint AllocatePeerId()
         {
-            for (int attempt = 0; attempt <= MaximumPeers; attempt++)
+            for (int attempt = 0;
+                 attempt <= MaximumPeers;
+                 attempt++)
             {
-                uint candidate = _nextPeerId++;
+                uint candidate =
+                    _nextPeerId++;
+
                 if (candidate == 0)
                     candidate = _nextPeerId++;
 
-                if (!_peersById.ContainsKey(candidate))
+                if (!_peersById.ContainsKey(
+                        candidate))
+                {
                     return candidate;
+                }
             }
 
-            throw new InvalidOperationException("No peer IDs are available.");
+            throw new InvalidOperationException(
+                "No peer IDs are available.");
         }
 
         private void ThrowIfDisposed()
         {
             if (_disposed)
-                throw new ObjectDisposedException(nameof(GameServer));
+            {
+                throw new ObjectDisposedException(
+                    nameof(GameServer));
+            }
         }
 
         private static ulong CreateRandomUInt64()
         {
-            byte[] bytes = new byte[sizeof(ulong)];
+            byte[] bytes =
+                new byte[sizeof(ulong)];
+
             ulong value;
 
-            using (RandomNumberGenerator random = RandomNumberGenerator.Create())
+            using (
+                RandomNumberGenerator random =
+                    RandomNumberGenerator.Create())
             {
                 do
                 {
                     random.GetBytes(bytes);
-                    value = BitConverter.ToUInt64(bytes, 0);
+
+                    value =
+                        BitConverter.ToUInt64(
+                            bytes,
+                            0);
                 }
                 while (value == 0);
             }

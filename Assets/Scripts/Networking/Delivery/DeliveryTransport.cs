@@ -6,24 +6,12 @@ namespace Networking
     public sealed class DeliveryTransport :
         INetworkDeliveryTransport
     {
-        private const uint Magic = 0x44564C59;
-        private const byte Version = 1;
-
         private const double ResendInterval = 0.2;
 
         private const int MaximumPendingPackets = 256;
         private const int MaximumBufferedPackets = 256;
         private const int MaximumIncomingEvents = 1024;
         private const int MaximumRawEventsPerUpdate = 2048;
-
-        private const int BasicHeaderSize =
-            sizeof(uint) +
-            sizeof(byte) +
-            sizeof(byte);
-
-        private const int SequencedHeaderSize =
-            BasicHeaderSize +
-            sizeof(uint);
 
         private readonly INetworkTransport _transport;
 
@@ -34,11 +22,12 @@ namespace Networking
                     ITransportHandle,
                     RemoteState>();
 
-        private readonly Queue<TransportEvent> _incoming =
-            new Queue<TransportEvent>();
+        private readonly Queue<DeliveryEvent> _incoming =
+            new Queue<DeliveryEvent>();
 
         private readonly List<uint> _sequenceScratch =
-            new List<uint>(MaximumPendingPackets);
+            new List<uint>(
+                MaximumPendingPackets);
 
         private double _now;
         private bool _disposed;
@@ -55,9 +44,11 @@ namespace Networking
                     nameof(transport));
         }
 
-        public void StartServer(ushort port)
+        public void StartServer(
+            ushort port)
         {
             ThrowIfDisposed();
+
             _transport.StartServer(port);
         }
 
@@ -84,31 +75,37 @@ namespace Networking
             }
 
             if (!_remotes.ContainsKey(remote))
-                _remotes.Add(remote, new RemoteState());
+            {
+                _remotes.Add(
+                    remote,
+                    new RemoteState());
+            }
         }
 
         public void RemoveRemote(
             ITransportHandle remote)
         {
-            if (_disposed || remote == null)
+            if (_disposed ||
+                remote == null)
+            {
                 return;
+            }
 
             _remotes.Remove(remote);
         }
 
         public bool Send(
             ITransportHandle destination,
-            byte[] data,
+            NetworkMessageType messageType,
+            byte[] payload,
             NetworkDelivery delivery)
         {
             if (_disposed ||
                 !_transport.IsRunning ||
                 destination == null ||
-                data == null ||
-                data.Length == 0 ||
-                data.Length >
-                    NetworkTransportLimits
-                        .MaximumApplicationDatagramSize)
+                payload == null ||
+                payload.Length >
+                    NetworkProtocol.MaximumPayloadSize)
             {
                 return false;
             }
@@ -118,17 +115,24 @@ namespace Networking
                 case NetworkDelivery.Unreliable:
                     return SendUnreliable(
                         destination,
-                        data);
+                        messageType,
+                        payload);
 
-                case NetworkDelivery.UnreliableSequenced:
+                case NetworkDelivery
+                    .UnreliableSequenced:
+
                     return SendUnreliableSequenced(
                         destination,
-                        data);
+                        messageType,
+                        payload);
 
-                case NetworkDelivery.ReliableOrdered:
+                case NetworkDelivery
+                    .ReliableOrdered:
+
                     return SendReliableOrdered(
                         destination,
-                        data);
+                        messageType,
+                        payload);
 
                 default:
                     return false;
@@ -148,21 +152,19 @@ namespace Networking
             int processed = 0;
 
             while (
-                processed < MaximumRawEventsPerUpdate &&
+                processed <
+                    MaximumRawEventsPerUpdate &&
                 _transport.TryPollEvent(
-                    out TransportEvent transportEvent))
+                    out TransportEvent
+                        transportEvent))
             {
                 processed++;
 
                 if (transportEvent.Type ==
                     TransportEventType.Error)
                 {
-                    if (_incoming.Count <
-                        MaximumIncomingEvents)
-                    {
-                        _incoming.Enqueue(
-                            transportEvent);
-                    }
+                    QueueError(
+                        transportEvent.Error);
 
                     continue;
                 }
@@ -172,20 +174,22 @@ namespace Networking
                     transportEvent.Data);
             }
 
-            DeliverReadyBufferedPackets();
+            DeliverReadyBufferedMessages();
             ResendPendingPackets();
         }
 
         public bool TryPollEvent(
-            out TransportEvent transportEvent)
+            out DeliveryEvent deliveryEvent)
         {
             if (_incoming.Count == 0)
             {
-                transportEvent = default;
+                deliveryEvent = default;
                 return false;
             }
 
-            transportEvent = _incoming.Dequeue();
+            deliveryEvent =
+                _incoming.Dequeue();
+
             return true;
         }
 
@@ -195,6 +199,7 @@ namespace Networking
                 return;
 
             _transport.Stop();
+
             ClearState();
         }
 
@@ -206,17 +211,21 @@ namespace Networking
             _disposed = true;
 
             _transport.Dispose();
+
             ClearState();
         }
 
         private bool SendUnreliable(
             ITransportHandle destination,
-            byte[] data)
+            NetworkMessageType messageType,
+            byte[] payload)
         {
-            byte[] datagram = Encode(
-                DeliveryPacketType.Unreliable,
-                0,
-                data);
+            byte[] datagram =
+                NetworkProtocol.EncodeMessage(
+                    messageType,
+                    NetworkDelivery.Unreliable,
+                    0,
+                    payload);
 
             return _transport.Send(
                 destination,
@@ -225,7 +234,8 @@ namespace Networking
 
         private bool SendUnreliableSequenced(
             ITransportHandle destination,
-            byte[] data)
+            NetworkMessageType messageType,
+            byte[] payload)
         {
             if (!_remotes.TryGetValue(
                     destination,
@@ -237,10 +247,13 @@ namespace Networking
             uint sequence =
                 state.NextUnreliableSendSequence;
 
-            byte[] datagram = Encode(
-                DeliveryPacketType.UnreliableSequenced,
-                sequence,
-                data);
+            byte[] datagram =
+                NetworkProtocol.EncodeMessage(
+                    messageType,
+                    NetworkDelivery
+                        .UnreliableSequenced,
+                    sequence,
+                    payload);
 
             if (!_transport.Send(
                     destination,
@@ -256,7 +269,8 @@ namespace Networking
 
         private bool SendReliableOrdered(
             ITransportHandle destination,
-            byte[] data)
+            NetworkMessageType messageType,
+            byte[] payload)
         {
             if (!_remotes.TryGetValue(
                     destination,
@@ -274,10 +288,12 @@ namespace Networking
             uint sequence =
                 state.NextReliableSendSequence;
 
-            byte[] datagram = Encode(
-                DeliveryPacketType.ReliableOrdered,
-                sequence,
-                data);
+            byte[] datagram =
+                NetworkProtocol.EncodeMessage(
+                    messageType,
+                    NetworkDelivery.ReliableOrdered,
+                    sequence,
+                    payload);
 
             if (!_transport.Send(
                     destination,
@@ -302,57 +318,65 @@ namespace Networking
             byte[] datagram)
         {
             if (remote == null ||
-                !TryDecode(
+                !NetworkProtocol.TryDecode(
                     datagram,
-                    out DeliveryPacketType type,
-                    out uint sequence,
-                    out byte[] payload))
+                    out NetworkPacket packet))
             {
                 return;
             }
 
-            // Handshake messages are unreliable and must be
-            // allowed before the server registers the remote.
-            if (type == DeliveryPacketType.Unreliable)
+            if (packet.IsAcknowledgement)
             {
-                QueueData(remote, payload);
+                if (_remotes.TryGetValue(
+                        remote,
+                        out RemoteState state))
+                {
+                    state.PendingReliable.Remove(
+                        packet.Sequence);
+                }
+
+                return;
+            }
+
+            // Handshake messages are unreliable and must
+            // be accepted before the server has registered
+            // the remote endpoint.
+            if (packet.Delivery ==
+                NetworkDelivery.Unreliable)
+            {
+                QueueMessage(
+                    remote,
+                    packet.MessageType,
+                    packet.Payload);
+
                 return;
             }
 
             if (!_remotes.TryGetValue(
                     remote,
-                    out RemoteState state))
+                    out RemoteState remoteState))
             {
                 return;
             }
 
-            switch (type)
+            switch (packet.Delivery)
             {
-                case DeliveryPacketType
+                case NetworkDelivery
                     .UnreliableSequenced:
 
                     ProcessUnreliableSequenced(
                         remote,
-                        state,
-                        sequence,
-                        payload);
+                        remoteState,
+                        packet);
                     break;
 
-                case DeliveryPacketType
+                case NetworkDelivery
                     .ReliableOrdered:
 
                     ProcessReliableOrdered(
                         remote,
-                        state,
-                        sequence,
-                        payload);
-                    break;
-
-                case DeliveryPacketType
-                    .Acknowledgement:
-
-                    state.PendingReliable.Remove(
-                        sequence);
+                        remoteState,
+                        packet);
                     break;
             }
         }
@@ -360,13 +384,13 @@ namespace Networking
         private void ProcessUnreliableSequenced(
             ITransportHandle remote,
             RemoteState state,
-            uint sequence,
-            byte[] payload)
+            NetworkPacket packet)
         {
             if (state.HasReceivedUnreliable &&
                 !SequenceUtility.IsNewer(
-                    sequence,
-                    state.LatestUnreliableReceiveSequence))
+                    packet.Sequence,
+                    state
+                        .LatestUnreliableReceiveSequence))
             {
                 return;
             }
@@ -374,26 +398,36 @@ namespace Networking
             state.HasReceivedUnreliable = true;
 
             state.LatestUnreliableReceiveSequence =
-                sequence;
+                packet.Sequence;
 
-            QueueData(remote, payload);
+            QueueMessage(
+                remote,
+                packet.MessageType,
+                packet.Payload);
         }
 
         private void ProcessReliableOrdered(
             ITransportHandle remote,
             RemoteState state,
-            uint sequence,
-            byte[] payload)
+            NetworkPacket packet)
         {
+            uint sequence =
+                packet.Sequence;
+
             uint expected =
                 state.NextReliableReceiveSequence;
 
             if (sequence == expected)
             {
-                // Do not acknowledge a packet unless it was
-                // successfully handed to the application queue.
-                if (!QueueData(remote, payload))
+                // Do not ACK a packet that could not be
+                // placed in the application event queue.
+                if (!QueueMessage(
+                        remote,
+                        packet.MessageType,
+                        packet.Payload))
+                {
                     return;
+                }
 
                 SendAcknowledgement(
                     remote,
@@ -401,7 +435,7 @@ namespace Networking
 
                 state.NextReliableReceiveSequence++;
 
-                DeliverBufferedPackets(
+                DeliverBufferedMessages(
                     remote,
                     state);
 
@@ -412,8 +446,9 @@ namespace Networking
                     sequence,
                     expected))
             {
-                // It has already been delivered. Acknowledge
-                // it again because the previous ACK was lost.
+                // This message was already delivered.
+                // ACK it again because the earlier
+                // acknowledgement was probably lost.
                 SendAcknowledgement(
                     remote,
                     sequence);
@@ -426,8 +461,8 @@ namespace Networking
                     expected,
                     sequence);
 
-            if (state.BufferedReliable.ContainsKey(
-                sequence))
+            if (state.BufferedReliable
+                .ContainsKey(sequence))
             {
                 SendAcknowledgement(
                     remote,
@@ -436,34 +471,43 @@ namespace Networking
                 return;
             }
 
-            if (distance > MaximumBufferedPackets ||
+            if (distance >
+                    MaximumBufferedPackets ||
                 state.BufferedReliable.Count >=
                     MaximumBufferedPackets)
             {
-                // It cannot be retained, so do not acknowledge it.
+                // The message was not retained, so it
+                // must not be acknowledged.
                 return;
             }
 
             state.BufferedReliable.Add(
                 sequence,
-                payload);
+                new BufferedMessage(
+                    packet.MessageType,
+                    packet.Payload));
 
             SendAcknowledgement(
                 remote,
                 sequence);
         }
 
-        private void DeliverBufferedPackets(
+        private void DeliverBufferedMessages(
             ITransportHandle remote,
             RemoteState state)
         {
             while (
                 state.BufferedReliable.TryGetValue(
                     state.NextReliableReceiveSequence,
-                    out byte[] payload))
+                    out BufferedMessage message))
             {
-                if (!QueueData(remote, payload))
+                if (!QueueMessage(
+                        remote,
+                        message.MessageType,
+                        message.Payload))
+                {
                     return;
+                }
 
                 state.BufferedReliable.Remove(
                     state.NextReliableReceiveSequence);
@@ -472,7 +516,7 @@ namespace Networking
             }
         }
 
-        private void DeliverReadyBufferedPackets()
+        private void DeliverReadyBufferedMessages()
         {
             foreach (
                 KeyValuePair<
@@ -486,7 +530,7 @@ namespace Networking
                     return;
                 }
 
-                DeliverBufferedPackets(
+                DeliverBufferedMessages(
                     remote.Key,
                     remote.Value);
             }
@@ -496,14 +540,14 @@ namespace Networking
             ITransportHandle remote,
             uint sequence)
         {
-            byte[] acknowledgement = Encode(
-                DeliveryPacketType.Acknowledgement,
-                sequence,
-                null);
+            byte[] datagram =
+                NetworkProtocol
+                    .EncodeAcknowledgement(
+                        sequence);
 
             _transport.Send(
                 remote,
-                acknowledgement);
+                datagram);
         }
 
         private void ResendPendingPackets()
@@ -558,135 +602,38 @@ namespace Networking
             _sequenceScratch.Clear();
         }
 
-        private bool QueueData(
+        private bool QueueMessage(
             ITransportHandle remote,
+            NetworkMessageType messageType,
             byte[] payload)
         {
             if (payload == null ||
-                payload.Length == 0 ||
-                _incoming.Count >= MaximumIncomingEvents)
+                _incoming.Count >=
+                    MaximumIncomingEvents)
             {
                 return false;
             }
 
             _incoming.Enqueue(
-                TransportEvent.DataReceived(
+                DeliveryEvent.MessageReceived(
                     remote,
+                    messageType,
                     payload));
 
             return true;
         }
 
-        private static byte[] Encode(
-            DeliveryPacketType type,
-            uint sequence,
-            byte[] payload)
+        private void QueueError(
+            string error)
         {
-            int headerSize =
-                type == DeliveryPacketType.Unreliable
-                    ? BasicHeaderSize
-                    : SequencedHeaderSize;
-
-            int payloadSize =
-                payload?.Length ?? 0;
-
-            var writer = new PacketWriter(
-                headerSize + payloadSize);
-
-            writer.Write(Magic);
-            writer.Write(Version);
-            writer.Write((byte)type);
-
-            if (type != DeliveryPacketType.Unreliable)
-                writer.Write(sequence);
-
-            if (payloadSize > 0)
-                writer.Write(payload);
-
-            return writer.ToArray();
-        }
-
-        private static bool TryDecode(
-            byte[] datagram,
-            out DeliveryPacketType type,
-            out uint sequence,
-            out byte[] payload)
-        {
-            type = default;
-            sequence = 0;
-            payload = null;
-
-            if (datagram == null ||
-                datagram.Length < BasicHeaderSize ||
-                datagram.Length >
-                    NetworkTransportLimits
-                        .MaximumDatagramSize)
+            if (_incoming.Count >=
+                MaximumIncomingEvents)
             {
-                return false;
+                return;
             }
 
-            try
-            {
-                var reader =
-                    new PacketReader(datagram);
-
-                uint magic =
-                    reader.ReadUInt32();
-
-                byte version =
-                    reader.ReadByte();
-
-                if (magic != Magic ||
-                    version != Version)
-                {
-                    return false;
-                }
-
-                type =
-                    (DeliveryPacketType)
-                    reader.ReadByte();
-
-                if (!Enum.IsDefined(
-                        typeof(DeliveryPacketType),
-                        type))
-                {
-                    return false;
-                }
-
-                if (type !=
-                    DeliveryPacketType.Unreliable)
-                {
-                    if (reader.Remaining < sizeof(uint))
-                        return false;
-
-                    sequence =
-                        reader.ReadUInt32();
-                }
-
-                if (type ==
-                    DeliveryPacketType.Acknowledgement)
-                {
-                    return reader.Remaining == 0;
-                }
-
-                if (reader.Remaining == 0 ||
-                    reader.Remaining >
-                        NetworkTransportLimits
-                            .MaximumApplicationDatagramSize)
-                {
-                    return false;
-                }
-
-                payload =
-                    reader.ReadBytes(
-                        reader.Remaining);
-
-                return true;
-            }
-            catch (InvalidOperationException)
-            {
-                return false;
-            }
+            _incoming.Enqueue(
+                DeliveryEvent.Failed(error));
         }
 
         private void ClearState()
@@ -703,14 +650,6 @@ namespace Networking
                 throw new ObjectDisposedException(
                     nameof(DeliveryTransport));
             }
-        }
-
-        private enum DeliveryPacketType : byte
-        {
-            Unreliable = 0,
-            UnreliableSequenced = 1,
-            ReliableOrdered = 2,
-            Acknowledgement = 3
         }
 
         private sealed class RemoteState
@@ -734,10 +673,10 @@ namespace Networking
 
             public readonly Dictionary<
                 uint,
-                byte[]> BufferedReliable =
+                BufferedMessage> BufferedReliable =
                     new Dictionary<
                         uint,
-                        byte[]>();
+                        BufferedMessage>();
         }
 
         private sealed class PendingPacket
@@ -755,6 +694,27 @@ namespace Networking
             }
         }
 
+        private readonly struct BufferedMessage
+        {
+            public NetworkMessageType MessageType
+            {
+                get;
+            }
+
+            public byte[] Payload
+            {
+                get;
+            }
+
+            public BufferedMessage(
+                NetworkMessageType messageType,
+                byte[] payload)
+            {
+                MessageType = messageType;
+                Payload = payload;
+            }
+        }
+
         private static class SequenceUtility
         {
             public static bool IsNewer(
@@ -763,7 +723,8 @@ namespace Networking
             {
                 return candidate != reference &&
                     unchecked(
-                        (int)(candidate - reference)) > 0;
+                        (int)
+                        (candidate - reference)) > 0;
             }
 
             public static uint ForwardDistance(

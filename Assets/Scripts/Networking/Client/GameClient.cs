@@ -29,6 +29,7 @@ namespace Networking
         private bool _disposed;
 
         public ClientConnectionState State => _state;
+
         public uint PeerId => _peerId;
 
         public bool IsConnected =>
@@ -40,8 +41,9 @@ namespace Networking
 
         public event Action<string> Error;
 
-        public event Action<NetworkMessageType, byte[]>
-            MessageReceived;
+        public event Action<
+            NetworkMessageType,
+            byte[]> MessageReceived;
 
         public GameClient(
             INetworkDeliveryTransport transport)
@@ -100,28 +102,29 @@ namespace Networking
             while (
                 processed < MaximumEventsPerUpdate &&
                 _transport.TryPollEvent(
-                    out TransportEvent transportEvent))
+                    out DeliveryEvent deliveryEvent))
             {
                 processed++;
 
-                if (transportEvent.Type ==
-                    TransportEventType.Error)
+                if (deliveryEvent.Type ==
+                    DeliveryEventType.Error)
                 {
                     Error?.Invoke(
-                        transportEvent.Error);
+                        deliveryEvent.Error);
 
                     continue;
                 }
 
-                if (transportEvent.Remote == null ||
+                if (deliveryEvent.Remote == null ||
                     !_server.Equals(
-                        transportEvent.Remote))
+                        deliveryEvent.Remote))
                 {
                     continue;
                 }
 
-                HandleDatagram(
-                    transportEvent.Data,
+                HandleMessage(
+                    deliveryEvent.MessageType,
+                    deliveryEvent.Payload,
                     now);
             }
 
@@ -207,6 +210,7 @@ namespace Networking
                 return;
 
             Disconnect();
+
             _transport.Dispose();
 
             _disposed = true;
@@ -216,10 +220,11 @@ namespace Networking
             NetworkMessageType type,
             Action<PacketWriter> writePayload,
             NetworkDelivery delivery =
-            NetworkDelivery.Unreliable)
+                NetworkDelivery.Unreliable)
         {
             if (_disposed ||
-                _state != ClientConnectionState.Connected)
+                _state !=
+                    ClientConnectionState.Connected)
             {
                 return false;
             }
@@ -230,20 +235,19 @@ namespace Networking
                 delivery);
         }
 
-        private void HandleDatagram(
+        private void HandleMessage(
+            NetworkMessageType type,
             byte[] data,
             double now)
         {
-            if (!NetworkProtocol.TryDecode(
-                    data,
-                    out NetworkMessageType type,
-                    out PacketReader payload))
-            {
+            if (data == null)
                 return;
-            }
 
             try
             {
+                var payload =
+                    new PacketReader(data);
+
                 switch (type)
                 {
                     case NetworkMessageType.ServerAccept:
@@ -268,7 +272,7 @@ namespace Networking
                     case NetworkMessageType.ObjectDespawn:
                         HandleApplicationMessage(
                             type,
-                            payload);
+                            data);
                         break;
                 }
             }
@@ -280,7 +284,7 @@ namespace Networking
 
         private void HandleApplicationMessage(
             NetworkMessageType type,
-            PacketReader payload)
+            byte[] data)
         {
             if (_state !=
                     ClientConnectionState.SendingReady &&
@@ -289,10 +293,6 @@ namespace Networking
             {
                 return;
             }
-
-            byte[] data =
-                payload.ReadBytes(
-                    payload.Remaining);
 
             MessageReceived?.Invoke(
                 type,
@@ -382,7 +382,7 @@ namespace Networking
         {
             if (payload.Remaining != sizeof(uint) ||
                 _state !=
-                ClientConnectionState.Connected)
+                    ClientConnectionState.Connected)
             {
                 return;
             }
@@ -433,14 +433,18 @@ namespace Networking
             NetworkDelivery delivery =
                 NetworkDelivery.Unreliable)
         {
-            byte[] data =
-                NetworkProtocol.Encode(
-                    type,
-                    writePayload);
+            var writer =
+                new PacketWriter();
+
+            writePayload?.Invoke(writer);
+
+            byte[] payload =
+                writer.ToArray();
 
             if (!_transport.Send(
                     _server,
-                    data,
+                    type,
+                    payload,
                     delivery))
             {
                 Error?.Invoke(
@@ -453,7 +457,8 @@ namespace Networking
             return true;
         }
 
-        private void TimeOut(string reason)
+        private void TimeOut(
+            string reason)
         {
             Error?.Invoke(reason);
 
@@ -470,6 +475,7 @@ namespace Networking
                 return;
 
             _state = state;
+
             StateChanged?.Invoke(state);
         }
 
