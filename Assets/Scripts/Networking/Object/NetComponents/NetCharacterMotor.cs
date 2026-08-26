@@ -26,6 +26,12 @@ namespace Networking
         private bool _hasReconciledInput;
         private bool _predictionEnabled;
 
+        public bool PredictionEnabled =>
+            _predictionEnabled;
+
+        public int PendingInputCount =>
+            _pendingInputs.Count;
+
         public override NetComponentType ComponentType =>
             NetComponentType.CharacterMotor;
 

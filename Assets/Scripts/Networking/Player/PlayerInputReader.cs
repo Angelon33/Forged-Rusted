@@ -6,6 +6,7 @@ namespace Networking
 {
     [DisallowMultipleComponent]
     [RequireComponent(typeof(NetObject))]
+    [RequireComponent(typeof(PlayerCameraRig))]
     public sealed class PlayerInputReader : MonoBehaviour
     {
         [Header("Input")]
@@ -15,15 +16,9 @@ namespace Networking
         [SerializeField]
         private string actionMapName = "Player";
 
-        [Header("Camera")]
+        [Header("Look")]
         [SerializeField]
-        private Transform cameraPivot;
-
-        [SerializeField]
-        private Camera playerCamera;
-
-        [SerializeField]
-        private AudioListener audioListener;
+        private PlayerCameraRig cameraRig;
 
         [SerializeField]
         private float mouseSensitivity = 2f;
@@ -53,16 +48,11 @@ namespace Networking
 
         private void Awake()
         {
-            if (playerCamera != null &&
-                audioListener == null)
+            if (cameraRig == null)
             {
-                audioListener =
-                    playerCamera.GetComponent<AudioListener>();
+                cameraRig =
+                    GetComponent<PlayerCameraRig>();
             }
-
-            // Every spawned prefab contains these components,
-            // but only the locally owned player enables them.
-            SetCameraActive(false);
         }
 
         public void Activate()
@@ -76,16 +66,10 @@ namespace Networking
                     "Assign an InputActionAsset to PlayerInputReader.");
             }
 
-            if (cameraPivot == null)
+            if (cameraRig == null)
             {
                 throw new InvalidOperationException(
-                    "Assign CameraPivot to PlayerInputReader.");
-            }
-
-            if (playerCamera == null)
-            {
-                throw new InvalidOperationException(
-                    "Assign PlayerCamera to PlayerInputReader.");
+                    "Assign PlayerCameraRig to PlayerInputReader.");
             }
 
             _controlsInstance =
@@ -125,13 +109,12 @@ namespace Networking
                 transform.eulerAngles.y;
 
             _pitch =
-                NormalizeAngle(
-                    cameraPivot.localEulerAngles.x);
+                cameraRig.Pitch;
 
             _playerMap.Enable();
             _active = true;
 
-            SetCameraActive(true);
+            cameraRig.Activate();
 
             if (lockCursor)
             {
@@ -147,7 +130,7 @@ namespace Networking
             if (!_active &&
                 _controlsInstance == null)
             {
-                SetCameraActive(false);
+                cameraRig?.Deactivate();
                 return;
             }
 
@@ -169,7 +152,7 @@ namespace Networking
 
             _jumpSendTicks = 0;
 
-            SetCameraActive(false);
+            cameraRig?.Deactivate();
 
             if (lockCursor)
             {
@@ -231,9 +214,7 @@ namespace Networking
                 return;
 
             if (_jumpAction.WasPressedThisFrame())
-            {
                 _jumpSendTicks = 3;
-            }
 
             Vector2 look =
                 _lookAction.ReadValue<Vector2>();
@@ -252,42 +233,20 @@ namespace Networking
                     -verticalLookLimit,
                     verticalLookLimit);
 
-            // Yaw rotates the complete character.
+            // Yaw rotates the simulation root.
             transform.rotation =
                 Quaternion.Euler(
                     0f,
                     _yaw,
                     0f);
 
-            // Pitch rotates only the camera pivot.
-            cameraPivot.localRotation =
-                Quaternion.Euler(
-                    _pitch,
-                    0f,
-                    0f);
-        }
-
-        private void SetCameraActive(bool active)
-        {
-            if (playerCamera != null)
-                playerCamera.enabled = active;
-
-            if (audioListener != null)
-                audioListener.enabled = active;
+            // Pitch affects only the camera target.
+            cameraRig.SetPitch(_pitch);
         }
 
         private void OnDestroy()
         {
             Deactivate();
-        }
-
-        private static float NormalizeAngle(
-            float angle)
-        {
-            if (angle > 180f)
-                angle -= 360f;
-
-            return angle;
         }
     }
 }

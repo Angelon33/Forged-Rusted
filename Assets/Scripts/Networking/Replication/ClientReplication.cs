@@ -177,6 +177,11 @@ namespace Networking
                 _inputReader.Activate();
                 _predictedMotor.StartPrediction();
 
+                Debug.Log(
+                    $"Local player {_localPlayer.NetworkId}: " +
+                    $"prediction enabled = " +
+                    $"{_predictedMotor.PredictionEnabled}");
+
                 return;
             }
         }

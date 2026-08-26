@@ -182,8 +182,7 @@ namespace Networking
                 state.ControllerHeight;
 
             _controller.center =
-                Vector3.up *
-                (state.ControllerHeight * 0.5f);
+                Vector3.zero;
 
             if (wasEnabled)
                 _controller.enabled = true;
@@ -212,8 +211,7 @@ namespace Networking
                 newHeight;
 
             _controller.center =
-                Vector3.up *
-                (newHeight * 0.5f);
+                Vector3.zero;
         }
     }
 }
