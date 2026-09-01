@@ -16,13 +16,17 @@ namespace Networking
         private readonly ServerReplication
             _replication;
 
+        private readonly NetworkDiagnostics
+            _diagnostics;
+
         private double _accumulator;
         private uint _serverTick;
         private bool _disposed;
 
         public ServerNetworkModule(
             GameServer server,
-            ServerReplication replication)
+            ServerReplication replication,
+            NetworkDiagnostics diagnostics)
         {
             _server = server ??
                 throw new ArgumentNullException(
@@ -31,6 +35,10 @@ namespace Networking
             _replication = replication ??
                 throw new ArgumentNullException(
                     nameof(replication));
+
+            _diagnostics = diagnostics ??
+                throw new ArgumentNullException(
+                    nameof(diagnostics));
         }
 
         public void Tick(
@@ -54,6 +62,9 @@ namespace Networking
                    ticks < MaximumTicksPerFrame)
             {
                 _serverTick++;
+
+                _diagnostics.ServerTick =
+                    _serverTick;
 
                 _replication.Tick(
                     _serverTick,

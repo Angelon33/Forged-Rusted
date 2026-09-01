@@ -12,6 +12,7 @@ namespace Networking
         private const int MaximumEventsPerUpdate = 256;
 
         private readonly INetworkDeliveryTransport _transport;
+        private readonly NetworkDiagnostics _diagnostics;
 
         private ITransportHandle _server;
 
@@ -25,6 +26,10 @@ namespace Networking
         private double _startedAt;
         private double _lastSendTime;
         private double _lastServerReceiveTime;
+
+        private uint _nextHeartbeatSequence = 1;
+        private uint _pendingHeartbeatSequence;
+        private double _pendingHeartbeatSentAt;
 
         private bool _disposed;
 
@@ -46,11 +51,16 @@ namespace Networking
             byte[]> MessageReceived;
 
         public GameClient(
-            INetworkDeliveryTransport transport)
+            INetworkDeliveryTransport transport,
+            NetworkDiagnostics diagnostics)
         {
             _transport = transport ??
                 throw new ArgumentNullException(
                     nameof(transport));
+
+            _diagnostics = diagnostics ??
+                throw new ArgumentNullException(
+                    nameof(diagnostics));
         }
 
         public void Connect(
@@ -381,15 +391,31 @@ namespace Networking
             PacketReader payload,
             double now)
         {
-            if (payload.Remaining != sizeof(uint) ||
+            if (payload.Remaining !=
+                    sizeof(uint) + sizeof(uint) ||
                 _state !=
                     ClientConnectionState.Connected)
             {
                 return;
             }
 
-            if (payload.ReadUInt32() == _peerId)
-                _lastServerReceiveTime = now;
+            uint peerId = payload.ReadUInt32();
+            uint heartbeatSequence = payload.ReadUInt32();
+
+            if (peerId != _peerId)
+                return;
+
+            _lastServerReceiveTime = now;
+
+            if (heartbeatSequence ==
+                _pendingHeartbeatSequence)
+            {
+                _diagnostics.RoundTripTimeMilliseconds =
+                    Math.Max(
+                        0.0,
+                        (now - _pendingHeartbeatSentAt) *
+                        1000.0);
+            }
         }
 
         private void SendHello(double now)
@@ -417,13 +443,25 @@ namespace Networking
 
         private void SendHeartbeat(double now)
         {
-            SendMessage(
+            uint heartbeatSequence =
+                _nextHeartbeatSequence++;
+
+            bool sent = SendMessage(
                 NetworkMessageType.Heartbeat,
                 writer =>
                 {
                     writer.Write(_peerId);
                     writer.Write(_sessionToken);
+                    writer.Write(heartbeatSequence);
                 });
+
+            if (sent)
+            {
+                _pendingHeartbeatSequence =
+                    heartbeatSequence;
+
+                _pendingHeartbeatSentAt = now;
+            }
 
             _lastSendTime = now;
         }

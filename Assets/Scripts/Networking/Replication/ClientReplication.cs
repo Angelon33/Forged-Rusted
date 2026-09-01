@@ -73,11 +73,20 @@ namespace Networking
                     _localPlayer.NetworkId,
                     _nextInputSequence++);
 
-            _client.Send(
+            bool sent = _client.Send(
                 NetworkMessageType.PlayerInput,
                 writer =>
                     message.Write(writer),
                 NetworkDelivery.UnreliableSequenced);
+
+            NetworkRuntime runtime =
+                NetworkRuntime.Current;
+
+            if (sent && runtime?.Diagnostics != null)
+            {
+                runtime.Diagnostics.LatestSentInputSequence =
+                    message.InputSequence;
+            }
 
             // Predict immediately instead of waiting for the
             // server's snapshot to return.
@@ -392,9 +401,9 @@ namespace Networking
                         NetComponentType.CharacterMotor,
                         out _))
                 {
-                    // NetCharacterMotor reconciles the local
-                    // predicted object. Applying NetTransform too
-                    // would cause the two systems to fight.
+                    /*
+                    Skipping Net Transform for local player because CharacterMotor already apllies authoritative state during reconciliation
+                    */
                     continue;
                 }
 
@@ -422,6 +431,12 @@ namespace Networking
             {
                 throw new InvalidOperationException(
                     "WorldSnapshot contains trailing bytes.");
+            }
+
+            if (runtime?.Diagnostics != null)
+            {
+                runtime.Diagnostics.ServerTick =
+                    serverTick;
             }
         }
 

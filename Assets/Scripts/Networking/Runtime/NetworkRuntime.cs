@@ -36,6 +36,23 @@ namespace Networking
         [SerializeField]
         private NetworkWorld world;
 
+        [Header("Diagnostics")]
+        [SerializeField]
+        private bool showNetworkOverlay = true;
+
+        [SerializeField]
+        [Min(1)]
+        private int pendingInputWarningThreshold = 12;
+
+        [SerializeField]
+        [Min(0f)]
+        private float correctionLogThreshold = 0.1f;
+
+        [Header("Artificial network conditions")]
+        [SerializeField]
+        private NetworkSimulationSettings networkSimulation =
+            new NetworkSimulationSettings();
+
         private GameServer _server;
         private GameClient _client;
 
@@ -59,6 +76,18 @@ namespace Networking
         public GameServer Server => _server;
 
         public GameClient Client => _client;
+
+        public NetworkDiagnostics Diagnostics
+        {
+            get;
+            private set;
+        }
+
+        public NetworkSimulationSettings NetworkSimulation =>
+            networkSimulation;
+
+        public int PendingInputWarningThreshold =>
+            pendingInputWarningThreshold;
 
         public uint LocalPeerId
         {
@@ -101,6 +130,24 @@ namespace Networking
 
             if (world == null)
                 world = GetComponent<NetworkWorld>();
+
+            if (networkSimulation == null)
+            {
+                networkSimulation =
+                    new NetworkSimulationSettings();
+            }
+
+            Diagnostics = new NetworkDiagnostics(
+                pendingInputWarningThreshold,
+                correctionLogThreshold);
+
+            NetworkDebugOverlay overlay =
+                GetComponent<NetworkDebugOverlay>();
+
+            if (overlay == null)
+                overlay = gameObject.AddComponent<NetworkDebugOverlay>();
+
+            overlay.Initialize(this, showNetworkOverlay);
 
             DontDestroyOnLoad(gameObject);
         }
@@ -166,6 +213,10 @@ namespace Networking
             }
 
             Mode = mode;
+
+            Diagnostics = new NetworkDiagnostics(
+                pendingInputWarningThreshold,
+                correctionLogThreshold);
 
             try
             {
@@ -258,7 +309,9 @@ namespace Networking
             _client =
                 new GameClient(
                     new DeliveryTransport(
-                        new UdpTransport()));
+                        CreateSimulatedTransport(
+                            new UdpTransport())),
+                    Diagnostics);
 
             SubscribeClient();
 
@@ -284,7 +337,8 @@ namespace Networking
             _server =
                 new GameServer(
                     new DeliveryTransport(
-                        new UdpTransport()));
+                        CreateSimulatedTransport(
+                            new UdpTransport())));
 
             SubscribeServer();
 
@@ -296,7 +350,8 @@ namespace Networking
             _modules.Add(
                 new ServerNetworkModule(
                     _server,
-                    replication));
+                    replication,
+                    Diagnostics));
 
             _server.Start(serverPort);
 
@@ -313,9 +368,10 @@ namespace Networking
                 out LoopbackTransport clientLoopback);
 
             var serverTransport =
-                new CompositeServerTransport(
-                    new UdpTransport(),
-                    serverLoopback);
+                CreateSimulatedTransport(
+                    new CompositeServerTransport(
+                        new UdpTransport(),
+                        serverLoopback));
 
             _server =
                 new GameServer(
@@ -332,14 +388,17 @@ namespace Networking
             _modules.Add(
                 new ServerNetworkModule(
                     _server,
-                    serverReplication));
+                    serverReplication,
+                    Diagnostics));
 
             _server.Start(serverPort);
 
             _client =
                 new GameClient(
                     new DeliveryTransport(
-                        clientLoopback));
+                        CreateSimulatedTransport(
+                            clientLoopback)),
+                    Diagnostics);
 
             SubscribeClient();
 
@@ -361,6 +420,15 @@ namespace Networking
             Debug.Log(
                 $"Listen server started on " +
                 $"UDP port {serverPort}.");
+        }
+
+        private INetworkTransport CreateSimulatedTransport(
+            INetworkTransport transport)
+        {
+            return new SimulatedNetworkTransport(
+                transport,
+                networkSimulation,
+                Diagnostics);
         }
 
         private void SubscribeServer()

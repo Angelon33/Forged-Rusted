@@ -89,6 +89,12 @@ namespace Networking
             NetworkRuntime runtime =
                 NetworkRuntime.Current;
 
+            runtime?.Diagnostics?.ReportPendingInputs(
+                    0,
+                    NetObject != null
+                        ? NetObject.NetworkId
+                        : 0);
+
             // The server owns the CharacterController on a
             // dedicated or listen server.
             if (runtime == null ||
@@ -116,6 +122,8 @@ namespace Networking
             {
                 _pendingInputs.RemoveAt(0);
             }
+
+            ReportPendingInputCount();
         }
 
         public void SetLastProcessedInputSequence(
@@ -223,6 +231,21 @@ namespace Networking
             _lastReconciledInputSequence =
                 acknowledgedInput;
 
+            CharacterMotorState predictedState =
+                _motor.CaptureState();
+
+            float correctionDistance =
+                Vector3.Distance(
+                    predictedState.Position,
+                    position);
+
+            NetworkDiagnostics diagnostics =
+                NetworkRuntime.Current?.Diagnostics;
+
+            diagnostics?.ReportReconciliation(
+                acknowledgedInput,
+                correctionDistance);
+
             // Anything at or before the acknowledged sequence has
             // already been represented by the server state.
             _pendingInputs.RemoveAll(
@@ -230,6 +253,8 @@ namespace Networking
                     !IsNewer(
                         message.InputSequence,
                         acknowledgedInput));
+
+            ReportPendingInputCount();
 
             _motor.RestoreState(
                 new CharacterMotorState(
@@ -259,6 +284,24 @@ namespace Networking
             return candidate != reference &&
                    unchecked(
                        (int)(candidate - reference)) > 0;
+        }
+
+        private void ReportPendingInputCount()
+        {
+            NetworkRuntime runtime =
+                NetworkRuntime.Current;
+
+            if (runtime?.Diagnostics == null)
+                return;
+
+            uint networkId =
+                NetObject != null
+                    ? NetObject.NetworkId
+                    : 0;
+
+            runtime.Diagnostics.ReportPendingInputs(
+                _pendingInputs.Count,
+                networkId);
         }
 
         private static bool IsFinite(

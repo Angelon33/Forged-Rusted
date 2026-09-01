@@ -382,7 +382,8 @@ namespace Networking
         {
             if (payload.Remaining !=
                 sizeof(uint) +
-                sizeof(ulong))
+                sizeof(ulong) +
+                sizeof(uint))
             {
                 return;
             }
@@ -392,6 +393,9 @@ namespace Networking
 
             ulong token =
                 payload.ReadUInt64();
+
+            uint heartbeatSequence =
+                payload.ReadUInt32();
 
             if (!TryAuthenticate(
                     remote,
@@ -410,7 +414,10 @@ namespace Networking
                 peer.Handle,
                 NetworkMessageType.HeartbeatAck,
                 writer =>
-                    writer.Write(peer.Id));
+                {
+                    writer.Write(peer.Id);
+                    writer.Write(heartbeatSequence);
+                });
         }
 
         private void HandleDisconnect(
