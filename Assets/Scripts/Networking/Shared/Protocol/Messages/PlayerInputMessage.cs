@@ -14,8 +14,7 @@ namespace Networking
 
     public readonly struct PlayerInputMessage
     {
-        public const int PayloadSize =
-            sizeof(uint) +
+        public const int CommandSize =
             sizeof(uint) +
             sizeof(float) +
             sizeof(float) +
@@ -65,9 +64,8 @@ namespace Networking
                 Buttons & ~PlayerInputButtons.Jump);
         }
 
-        public void Write(PacketWriter writer)
+        internal void WriteCommand(PacketWriter writer)
         {
-            writer.Write(NetworkId);
             writer.Write(InputSequence);
             writer.Write(Move.x);
             writer.Write(Move.y);
@@ -75,70 +73,53 @@ namespace Networking
             writer.Write((byte)Buttons);
         }
 
-        public static bool TryRead(
-            byte[] data,
+        internal static bool TryReadCommand(
+            PacketReader reader,
+            uint networkId,
             out PlayerInputMessage message)
         {
             message = default;
 
-            if (data == null ||
-                data.Length != PayloadSize)
+            if (reader == null ||
+                networkId == 0 ||
+                reader.Remaining < CommandSize)
             {
                 return false;
             }
 
-            try
-            {
-                var reader =
-                    new PacketReader(data);
+            uint inputSequence =
+                reader.ReadUInt32();
 
-                uint networkId =
-                    reader.ReadUInt32();
+            float moveX = reader.ReadFloat();
+            float moveY = reader.ReadFloat();
+            float yaw = reader.ReadFloat();
 
-                uint inputSequence =
-                    reader.ReadUInt32();
+            var buttons =
+                (PlayerInputButtons)
+                reader.ReadByte();
 
-                float moveX =
-                    reader.ReadFloat();
+            const PlayerInputButtons allowedButtons =
+                PlayerInputButtons.Jump |
+                PlayerInputButtons.Sprint |
+                PlayerInputButtons.Crouch;
 
-                float moveY =
-                    reader.ReadFloat();
-
-                float yaw =
-                    reader.ReadFloat();
-
-                var buttons =
-                    (PlayerInputButtons)
-                    reader.ReadByte();
-
-                const PlayerInputButtons allowedButtons =
-                    PlayerInputButtons.Jump |
-                    PlayerInputButtons.Sprint |
-                    PlayerInputButtons.Crouch;
-
-                if (networkId == 0 ||
-                    !IsFinite(moveX) ||
-                    !IsFinite(moveY) ||
-                    !IsFinite(yaw) ||
-                    (buttons & ~allowedButtons) != 0)
-                {
-                    return false;
-                }
-
-                message =
-                    new PlayerInputMessage(
-                        networkId,
-                        inputSequence,
-                        new Vector2(moveX, moveY),
-                        yaw,
-                        buttons);
-
-                return true;
-            }
-            catch (InvalidOperationException)
+            if (inputSequence == 0 ||
+                !IsFinite(moveX) ||
+                !IsFinite(moveY) ||
+                !IsFinite(yaw) ||
+                (buttons & ~allowedButtons) != 0)
             {
                 return false;
             }
+
+            message = new PlayerInputMessage(
+                networkId,
+                inputSequence,
+                new Vector2(moveX, moveY),
+                yaw,
+                buttons);
+
+            return true;
         }
 
         private static bool IsFinite(float value)

@@ -18,12 +18,19 @@ namespace Networking
         private const float TickDelta =
             1f / 33f;
 
+        private const int MaximumInputHistory = 32;
+
         private readonly GameClient _client;
         private readonly NetworkWorld _world;
 
         private readonly HashSet<NetTransform>
             _interpolated =
                 new HashSet<NetTransform>();
+
+        private readonly List<PlayerInputMessage>
+            _inputHistory =
+                new List<PlayerInputMessage>(
+                    MaximumInputHistory);
 
         private NetObject _localPlayer;
         private PlayerInputReader _inputReader;
@@ -71,12 +78,42 @@ namespace Networking
             PlayerInputMessage message =
                 _inputReader.BuildMessage(
                     _localPlayer.NetworkId,
-                    _nextInputSequence++);
+                    AllocateNextInputSequence());
+
+            _inputHistory.Add(message);
+
+            if (_inputHistory.Count >
+                MaximumInputHistory)
+            {
+                _inputHistory.RemoveAt(0);
+            }
+
+            int commandCount = Math.Min(
+                PlayerInputBatchMessage.MaximumCommands,
+                _inputHistory.Count);
+
+            var commands =
+                new PlayerInputMessage[commandCount];
+
+            int firstCommand =
+                _inputHistory.Count - commandCount;
+
+            for (int index = 0;
+                 index < commandCount;
+                 index++)
+            {
+                commands[index] =
+                    _inputHistory[firstCommand + index];
+            }
+
+            var batch = new PlayerInputBatchMessage(
+                _localPlayer.NetworkId,
+                commands);
 
             bool sent = _client.Send(
                 NetworkMessageType.PlayerInput,
                 writer =>
-                    message.Write(writer),
+                    batch.Write(writer),
                 NetworkDelivery.UnreliableSequenced);
 
             NetworkRuntime runtime =
@@ -143,6 +180,8 @@ namespace Networking
             _predictedMotor = null;
             _localPlayer = null;
 
+            ResetInputHistory();
+
             _interpolated.Clear();
         }
 
@@ -163,6 +202,8 @@ namespace Networking
             _inputReader = null;
             _predictedMotor = null;
             _localPlayer = null;
+
+            ResetInputHistory();
 
             foreach (NetObject netObject in _world.Objects)
             {
@@ -308,6 +349,8 @@ namespace Networking
                 _inputReader = null;
                 _predictedMotor = null;
                 _localPlayer = null;
+
+                ResetInputHistory();
             }
 
             if (networkId != 0)
@@ -401,9 +444,9 @@ namespace Networking
                         NetComponentType.CharacterMotor,
                         out _))
                 {
-                    /*
-                    Skipping Net Transform for local player because CharacterMotor already apllies authoritative state during reconciliation
-                    */
+                    // NetCharacterMotor reconciles the local
+                    // predicted object. Applying NetTransform too
+                    // would cause the two systems to fight.
                     continue;
                 }
 
@@ -446,6 +489,24 @@ namespace Networking
             return IsFinite(value.x) &&
                    IsFinite(value.y) &&
                    IsFinite(value.z);
+        }
+
+        private void ResetInputHistory()
+        {
+            _inputHistory.Clear();
+            _nextInputSequence = 1;
+        }
+
+        private uint AllocateNextInputSequence()
+        {
+            uint sequence = _nextInputSequence++;
+
+            // Zero is reserved for "no input processed" in
+            // authoritative snapshots.
+            if (sequence == 0)
+                sequence = _nextInputSequence++;
+
+            return sequence;
         }
 
         private static bool IsFinite(

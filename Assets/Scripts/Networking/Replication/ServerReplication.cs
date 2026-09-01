@@ -161,20 +161,14 @@ namespace Networking
 
             motor.SetSimulationEnabled(true);
 
-            var initialMessage =
-                new PlayerInputMessage(
-                    netObject.NetworkId,
-                    0,
-                    Vector2.zero,
-                    netObject.transform.eulerAngles.y,
-                    PlayerInputButtons.None);
-
             _playersByPeer[netObject.OwnerPeerId] =
                 new PlayerState(
                     netObject.NetworkId,
                     motor,
                     networkMotor,
-                    initialMessage);
+                    new ServerInputCommandBuffer(
+                        netObject.NetworkId,
+                        netObject.transform.eulerAngles.y));
         }
 
         private void OnMessageReceived(
@@ -184,32 +178,25 @@ namespace Networking
         {
             if (type !=
                     NetworkMessageType.PlayerInput ||
-                !PlayerInputMessage.TryRead(
+                !PlayerInputBatchMessage.TryRead(
                     data,
-                    out PlayerInputMessage Message) ||
+                    out PlayerInputBatchMessage batch) ||
                 !_playersByPeer.TryGetValue(
                     peer.Id,
                     out PlayerState state) ||
-                Message.NetworkId !=
+                batch.NetworkId !=
                     state.NetworkId)
             {
                 return;
             }
 
-            if (state.HasReceivedInput &&
-                !IsNewer(
-                    Message.InputSequence,
-                    state.LatestInputSequence))
+            for (int index = 0;
+                 index < batch.Commands.Length;
+                 index++)
             {
-                return;
+                state.InputBuffer.TryInsert(
+                    batch.Commands[index]);
             }
-
-            state.HasReceivedInput = true;
-
-            state.LatestInputSequence =
-                Message.InputSequence;
-
-            state.Message = Message;
         }
 
         private void SimulatePlayers(
@@ -222,21 +209,23 @@ namespace Networking
                 if (state.Motor == null)
                     continue;
 
+                PlayerInputMessage command =
+                    state.InputBuffer.GetCommandForTick(
+                        out bool consumesSequence);
+
                 state.Motor.Simulate(
-                    state.Message,
+                    command,
                     deltaTime);
 
-                if (state.HasReceivedInput)
+                if (consumesSequence)
                 {
+                    state.InputBuffer.MarkSimulated(
+                        command);
+
                     state.NetworkMotor
                         .SetLastProcessedInputSequence(
-                            state.LatestInputSequence);
+                            command.InputSequence);
                 }
-
-                // Jump represents a pressed edge. Sprint and
-                // crouch remain active until input changes.
-                state.Message =
-                    state.Message.WithoutJump();
             }
         }
 
@@ -378,15 +367,6 @@ namespace Networking
             writer.Write(rotation.w);
         }
 
-        private static bool IsNewer(
-            uint candidate,
-            uint reference)
-        {
-            return candidate != reference &&
-                   unchecked(
-                       (int)(candidate - reference)) > 0;
-        }
-
         private sealed class PlayerState
         {
             public uint NetworkId { get; }
@@ -398,34 +378,23 @@ namespace Networking
                 get;
             }
 
-            public PlayerInputMessage Message
+            public ServerInputCommandBuffer InputBuffer
             {
                 get;
-                set;
-            }
-
-            public uint LatestInputSequence
-            {
-                get;
-                set;
-            }
-
-            public bool HasReceivedInput
-            {
-                get;
-                set;
             }
 
             public PlayerState(
                 uint networkId,
                 CharacterMotor motor,
                 NetCharacterMotor networkMotor,
-                PlayerInputMessage Message)
+                ServerInputCommandBuffer inputBuffer)
             {
                 NetworkId = networkId;
                 Motor = motor;
                 NetworkMotor = networkMotor;
-                this.Message = Message;
+                InputBuffer = inputBuffer ??
+                    throw new ArgumentNullException(
+                        nameof(inputBuffer));
             }
         }
     }
