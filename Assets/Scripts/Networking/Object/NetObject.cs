@@ -11,10 +11,10 @@ namespace Networking
         private ushort prefabId;
 
         private readonly Dictionary
-            <NetComponentType, NetBehaviour>
+            <NetBehaviourType, NetBehaviour>
             _behavioursByType =
                 new Dictionary
-                    <NetComponentType, NetBehaviour>();
+                    <NetBehaviourType, NetBehaviour>();
 
         private NetBehaviour[] _behaviours =
             Array.Empty<NetBehaviour>();
@@ -117,7 +117,7 @@ namespace Networking
         }
 
         public bool TryGetBehaviour(
-            NetComponentType componentType,
+            NetBehaviourType componentType,
             out NetBehaviour behaviour)
         {
             return _behavioursByType.TryGetValue(
@@ -126,7 +126,7 @@ namespace Networking
         }
 
         public bool TryApplyState(
-            NetComponentType componentType,
+            NetBehaviourType componentType,
             byte[] state,
             uint serverTick)
         {
@@ -175,7 +175,7 @@ namespace Networking
                 NetBehaviour behaviour =
                     _behaviours[index];
 
-                NetComponentType type =
+                NetBehaviourType type =
                     behaviour.ComponentType;
 
                 if (_behavioursByType.ContainsKey(type))

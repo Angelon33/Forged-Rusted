@@ -4,7 +4,8 @@ using UnityEngine;
 
 namespace Networking
 {
-    public sealed class ClientReplication : IDisposable
+    public sealed class ClientWorldReplication :
+        IDisposable
     {
         private const int SpawnPayloadSize =
             sizeof(ushort) +
@@ -15,121 +16,38 @@ namespace Networking
 
         private const int MaximumSnapshotEntries = 32;
 
-        private const float TickDelta =
-            1f / 33f;
-
-        private const int MaximumInputHistory = 32;
-
-        private readonly GameClient _client;
+        private readonly ClientMessageRouter _router;
         private readonly NetworkWorld _world;
 
         private readonly HashSet<NetTransform>
             _interpolated =
                 new HashSet<NetTransform>();
 
-        private readonly List<PlayerInputMessage>
-            _inputHistory =
-                new List<PlayerInputMessage>(
-                    MaximumInputHistory);
-
-        private NetObject _localPlayer;
-        private PlayerInputReader _inputReader;
-        private NetCharacterMotor _predictedMotor;
-
-        // Zero means no input has been processed, so real
-        // input sequences begin at one.
-        private uint _nextInputSequence = 1;
-
         private bool _disposed;
 
-        public ClientReplication(
-            GameClient client,
+        public ClientWorldReplication(
+            ClientMessageRouter router,
             NetworkWorld world)
         {
-            _client = client ??
+            _router = router ??
                 throw new ArgumentNullException(
-                    nameof(client));
+                    nameof(router));
 
             _world = world ??
                 throw new ArgumentNullException(
                     nameof(world));
 
-            _client.MessageReceived +=
-                OnMessageReceived;
-        }
+            _router.Register(
+                NetworkMessageType.ObjectSpawn,
+                HandleSpawnSafe);
 
-        public void SendInput()
-        {
-            if (_disposed ||
-                !_client.IsConnected)
-            {
-                return;
-            }
+            _router.Register(
+                NetworkMessageType.ObjectDespawn,
+                HandleDespawnSafe);
 
-            EnsureLocalPlayer();
-
-            if (_localPlayer == null ||
-                _inputReader == null ||
-                _predictedMotor == null)
-            {
-                return;
-            }
-
-            PlayerInputMessage message =
-                _inputReader.BuildMessage(
-                    _localPlayer.NetworkId,
-                    AllocateNextInputSequence());
-
-            _inputHistory.Add(message);
-
-            if (_inputHistory.Count >
-                MaximumInputHistory)
-            {
-                _inputHistory.RemoveAt(0);
-            }
-
-            int commandCount = Math.Min(
-                PlayerInputBatchMessage.MaximumCommands,
-                _inputHistory.Count);
-
-            var commands =
-                new PlayerInputMessage[commandCount];
-
-            int firstCommand =
-                _inputHistory.Count - commandCount;
-
-            for (int index = 0;
-                 index < commandCount;
-                 index++)
-            {
-                commands[index] =
-                    _inputHistory[firstCommand + index];
-            }
-
-            var batch = new PlayerInputBatchMessage(
-                _localPlayer.NetworkId,
-                commands);
-
-            bool sent = _client.Send(
-                NetworkMessageType.PlayerInput,
-                writer =>
-                    batch.Write(writer),
-                NetworkDelivery.UnreliableSequenced);
-
-            NetworkRuntime runtime =
-                NetworkRuntime.Current;
-
-            if (sent && runtime?.Diagnostics != null)
-            {
-                runtime.Diagnostics.LatestSentInputSequence =
-                    message.InputSequence;
-            }
-
-            // Predict immediately instead of waiting for the
-            // server's snapshot to return.
-            _predictedMotor.Predict(
-                message,
-                TickDelta);
+            _router.Register(
+                NetworkMessageType.WorldSnapshot,
+                HandleWorldSnapshotSafe);
         }
 
         public void Interpolate(float deltaTime)
@@ -146,20 +64,22 @@ namespace Networking
             if (runtime != null &&
                 runtime.RunsServer)
             {
-                // Listen servers share authoritative objects.
+                // Listen server shares authoritative objects.
                 return;
             }
 
             _interpolated.RemoveWhere(
                 netTransform =>
                     netTransform == null ||
+                    netTransform.NetObject == null ||
                     !netTransform.NetObject.IsSpawned);
 
             foreach (
                 NetTransform netTransform
                 in _interpolated)
             {
-                netTransform.Interpolate(deltaTime);
+                netTransform.Interpolate(
+                    deltaTime);
             }
         }
 
@@ -170,97 +90,60 @@ namespace Networking
 
             _disposed = true;
 
-            _client.MessageReceived -=
-                OnMessageReceived;
+            _router.Unregister(
+                NetworkMessageType.ObjectSpawn,
+                HandleSpawnSafe);
 
-            _inputReader?.Deactivate();
-            _predictedMotor?.StopPrediction();
+            _router.Unregister(
+                NetworkMessageType.ObjectDespawn,
+                HandleDespawnSafe);
 
-            _inputReader = null;
-            _predictedMotor = null;
-            _localPlayer = null;
-
-            ResetInputHistory();
+            _router.Unregister(
+                NetworkMessageType.WorldSnapshot,
+                HandleWorldSnapshotSafe);
 
             _interpolated.Clear();
         }
 
-        private void EnsureLocalPlayer()
-        {
-            if (_localPlayer != null &&
-                _localPlayer.IsSpawned &&
-                _localPlayer.IsLocallyOwned &&
-                _inputReader != null &&
-                _predictedMotor != null)
-            {
-                return;
-            }
-
-            _inputReader?.Deactivate();
-            _predictedMotor?.StopPrediction();
-
-            _inputReader = null;
-            _predictedMotor = null;
-            _localPlayer = null;
-
-            ResetInputHistory();
-
-            foreach (NetObject netObject in _world.Objects)
-            {
-                if (netObject == null ||
-                    !netObject.IsLocallyOwned ||
-                    !netObject.TryGetComponent(
-                        out PlayerInputReader reader) ||
-                    !netObject.TryGetBehaviour(
-                        NetComponentType.CharacterMotor,
-                        out NetBehaviour behaviour) ||
-                    !(behaviour is
-                        NetCharacterMotor predictedMotor))
-                {
-                    continue;
-                }
-
-                _localPlayer = netObject;
-                _inputReader = reader;
-                _predictedMotor = predictedMotor;
-
-                _inputReader.Activate();
-                _predictedMotor.StartPrediction();
-
-                Debug.Log(
-                    $"Local player {_localPlayer.NetworkId}: " +
-                    $"prediction enabled = " +
-                    $"{_predictedMotor.PredictionEnabled}");
-
-                return;
-            }
-        }
-
-        private void OnMessageReceived(
-            NetworkMessageType type,
-            byte[] data)
+        private void HandleSpawnSafe(byte[] data)
         {
             try
             {
-                switch (type)
-                {
-                    case NetworkMessageType.ObjectSpawn:
-                        HandleSpawn(data);
-                        break;
-
-                    case NetworkMessageType.ObjectDespawn:
-                        HandleDespawn(data);
-                        break;
-
-                    case NetworkMessageType.WorldSnapshot:
-                        HandleWorldSnapshot(data);
-                        break;
-                }
+                HandleSpawn(data);
             }
             catch (InvalidOperationException exception)
             {
                 Debug.LogWarning(
-                    $"Discarded malformed {type}: " +
+                    $"Discarded malformed ObjectSpawn: " +
+                    exception.Message);
+            }
+        }
+
+        private void HandleDespawnSafe(byte[] data)
+        {
+            try
+            {
+                HandleDespawn(data);
+            }
+            catch (InvalidOperationException exception)
+            {
+                Debug.LogWarning(
+                    $"Discarded malformed ObjectDespawn: " +
+                    exception.Message);
+            }
+        }
+
+        private void HandleWorldSnapshotSafe(
+            byte[] data)
+        {
+            try
+            {
+                HandleWorldSnapshot(data);
+            }
+            catch (InvalidOperationException exception)
+            {
+                Debug.LogWarning(
+                    $"Discarded malformed WorldSnapshot: " +
                     exception.Message);
             }
         }
@@ -340,21 +223,11 @@ namespace Networking
             uint networkId =
                 reader.ReadUInt32();
 
-            if (_localPlayer != null &&
-                _localPlayer.NetworkId == networkId)
-            {
-                _inputReader?.Deactivate();
-                _predictedMotor?.StopPrediction();
+            if (networkId == 0)
+                return;
 
-                _inputReader = null;
-                _predictedMotor = null;
-                _localPlayer = null;
-
-                ResetInputHistory();
-            }
-
-            if (networkId != 0)
-                _world.DespawnReplica(networkId);
+            _world.DespawnReplica(
+                networkId);
         }
 
         private void HandleWorldSnapshot(
@@ -366,8 +239,7 @@ namespace Networking
             if (runtime != null &&
                 runtime.RunsServer)
             {
-                // Never apply loopback snapshots to shared,
-                // authoritative listen-server objects.
+                // Listen servers already own authoritative state.
                 return;
             }
 
@@ -413,7 +285,7 @@ namespace Networking
                     reader.ReadUInt32();
 
                 var componentType =
-                    (NetComponentType)
+                    (NetBehaviourType)
                     reader.ReadByte();
 
                 ushort stateLength =
@@ -421,13 +293,15 @@ namespace Networking
 
                 if (networkId == 0 ||
                     stateLength == 0 ||
-                    reader.Remaining < stateLength)
+                    reader.Remaining <
+                        stateLength)
                 {
                     return;
                 }
 
                 byte[] state =
-                    reader.ReadBytes(stateLength);
+                    reader.ReadBytes(
+                        stateLength);
 
                 if (!_world.TryGet(
                         networkId,
@@ -438,15 +312,14 @@ namespace Networking
                 }
 
                 if (componentType ==
-                        NetComponentType.Transform &&
-                    netObject.IsLocallyOwned &&
-                    netObject.TryGetBehaviour(
-                        NetComponentType.CharacterMotor,
-                        out _))
+                        NetBehaviourType.Transform &&
+                    netObject.IsLocallyOwned)
                 {
-                    // NetCharacterMotor reconciles the local
-                    // predicted object. Applying NetTransform too
-                    // would cause the two systems to fight.
+                    /*
+                    * Locally owned movement is driven by
+                    * ClientPlayerMovement prediction and
+                    * PlayerMovementState reconciliation.
+                    */
                     continue;
                 }
 
@@ -459,14 +332,15 @@ namespace Networking
                 }
 
                 if (componentType ==
-                        NetComponentType.Transform &&
+                        NetBehaviourType.Transform &&
                     netObject.TryGetBehaviour(
-                        NetComponentType.Transform,
+                        NetBehaviourType.Transform,
                         out NetBehaviour behaviour) &&
                     behaviour is
                         NetTransform netTransform)
                 {
-                    _interpolated.Add(netTransform);
+                    _interpolated.Add(
+                        netTransform);
                 }
             }
 
@@ -489,24 +363,6 @@ namespace Networking
             return IsFinite(value.x) &&
                    IsFinite(value.y) &&
                    IsFinite(value.z);
-        }
-
-        private void ResetInputHistory()
-        {
-            _inputHistory.Clear();
-            _nextInputSequence = 1;
-        }
-
-        private uint AllocateNextInputSequence()
-        {
-            uint sequence = _nextInputSequence++;
-
-            // Zero is reserved for "no input processed" in
-            // authoritative snapshots.
-            if (sequence == 0)
-                sequence = _nextInputSequence++;
-
-            return sequence;
         }
 
         private static bool IsFinite(

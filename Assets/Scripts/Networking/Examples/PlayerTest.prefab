@@ -273,7 +273,6 @@ GameObject:
   - component: {fileID: 4904279303784938313}
   - component: {fileID: -9106368850467178836}
   - component: {fileID: -872045066642791610}
-  - component: {fileID: -5391911837839593169}
   - component: {fileID: 9195352802936833840}
   - component: {fileID: 4684520688572503135}
   m_Layer: 0
@@ -326,6 +325,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::NetTransform
   interpolationSharpness: 15
   snapDistance: 5
+  replicationPositionThreshold: 0.001
+  replicationRotationThreshold: 0.1
 --- !u!143 &-9106368850467178836
 CharacterController:
   m_ObjectHideFlags: 0
@@ -370,18 +371,6 @@ MonoBehaviour:
   groundedVelocity: -0.5
   crouchHeight: 1
   heightTransitionSpeed: 10
---- !u!114 &-5391911837839593169
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 7875186105206833559}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: bb3472149fc838a47aed24bb0c9386a9, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::NetPlayerMotor
 --- !u!114 &9195352802936833840
 MonoBehaviour:
   m_ObjectHideFlags: 0

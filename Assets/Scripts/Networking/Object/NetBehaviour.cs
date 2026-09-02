@@ -6,7 +6,9 @@ namespace Networking
     public abstract class NetBehaviour
         : MonoBehaviour
     {
-        public abstract NetComponentType ComponentType
+        private uint _stateVersion = 1;
+
+        public abstract NetBehaviourType ComponentType
         {
             get;
         }
@@ -17,9 +19,31 @@ namespace Networking
             private set;
         }
 
-        internal void Bind(NetObject netObject)
+        public uint StateVersion =>
+            _stateVersion;
+
+        internal void Bind(
+            NetObject netObject)
         {
             NetObject = netObject;
+        }
+
+        protected void MarkDirty()
+        {
+            unchecked
+            {
+                _stateVersion++;
+
+                // Reserve zero for "no state known".
+                if (_stateVersion == 0)
+                {
+                    _stateVersion = 1;
+                }
+            }
+        }
+
+        public virtual void RefreshReplicationState()
+        {
         }
 
         public virtual void OnNetSpawn()

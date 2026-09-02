@@ -12,12 +12,23 @@ namespace Networking
         [SerializeField]
         private float snapDistance = 5f;
 
+        [SerializeField]
+        private float replicationPositionThreshold = 0.001f;
+
+        [SerializeField]
+        private float replicationRotationThreshold = 0.1f;
+
         private Vector3 _targetPosition;
         private Quaternion _targetRotation;
         private bool _hasTarget;
 
-        public override NetComponentType ComponentType =>
-            NetComponentType.Transform;
+        private Vector3 _lastObservedPosition;
+        private Quaternion _lastObservedRotation;
+
+        private bool _hasObservedReplicationState;
+
+        public override NetBehaviourType ComponentType =>
+            NetBehaviourType.Transform;
 
         public override void OnNetSpawn()
         {
@@ -28,18 +39,82 @@ namespace Networking
                 transform.rotation;
 
             _hasTarget = false;
+
+            _lastObservedPosition =
+                transform.position;
+
+            _lastObservedRotation =
+                transform.rotation;
+
+            _hasObservedReplicationState = false;
         }
 
         public override void OnNetDespawn()
         {
             _hasTarget = false;
+
+            _hasObservedReplicationState = false;
+        }
+
+        public override void RefreshReplicationState()
+        {
+            Vector3 currentPosition =
+                transform.position;
+
+            Quaternion currentRotation =
+                transform.rotation;
+
+            if (!_hasObservedReplicationState)
+            {
+                _hasObservedReplicationState = true;
+
+                _lastObservedPosition =
+                    currentPosition;
+
+                _lastObservedRotation =
+                    currentRotation;
+
+                MarkDirty();
+
+                return;
+            }
+
+            float positionThresholdSquared =
+                replicationPositionThreshold *
+                replicationPositionThreshold;
+
+            bool positionChanged =
+                (currentPosition -
+                _lastObservedPosition)
+                .sqrMagnitude >=
+                positionThresholdSquared;
+
+            bool rotationChanged =
+                Quaternion.Angle(
+                    currentRotation,
+                    _lastObservedRotation) >=
+                replicationRotationThreshold;
+
+            if (!positionChanged &&
+                !rotationChanged)
+            {
+                return;
+            }
+
+            _lastObservedPosition =
+                currentPosition;
+
+            _lastObservedRotation =
+                currentRotation;
+
+            MarkDirty();
         }
 
         public override void WriteState(
             PacketWriter writer)
         {
             var message =
-                new TransformSnapshotMessage(
+                new NetTransformState(
                     transform.position,
                     transform.rotation);
 
@@ -50,9 +125,9 @@ namespace Networking
             PacketReader reader,
             uint serverTick)
         {
-            if (!TransformSnapshotMessage.TryRead(
+            if (!NetTransformState.TryRead(
                     reader,
-                    out TransformSnapshotMessage message))
+                    out NetTransformState message))
             {
                 throw new InvalidOperationException(
                     "Received an invalid transform snapshot.");

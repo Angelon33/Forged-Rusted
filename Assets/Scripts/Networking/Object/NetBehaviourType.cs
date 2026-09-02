@@ -1,11 +1,10 @@
 namespace Networking
 {
-    public enum NetComponentType : byte
+    public enum NetBehaviourType : byte
     {
         Transform = 1,
         Health = 2,
         Animator = 3,
-        Inventory = 4,
-        CharacterMotor = 5
+        Inventory = 4
     }
 }

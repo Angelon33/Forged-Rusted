@@ -5,31 +5,47 @@ namespace Networking
     public sealed class ClientNetworkModule
         : INetworkModule
     {
-        private const double TickInterval =
-            1.0 / 33.0;
-
+        public int TickOrder => 0;
+        public int DisposeOrder => 0;
         private const int MaximumTicksPerFrame = 5;
         private const double MaximumFrameTime = 0.25;
 
         private readonly GameClient _client;
+        private readonly ClientMessageRouter _router;
 
-        private readonly ClientReplication
-            _replication;
+        private readonly ClientWorldReplication
+            _worldReplication;
+
+        private readonly ClientPlayerMovement
+            _playerMovement;
 
         private double _accumulator;
         private bool _disposed;
 
         public ClientNetworkModule(
             GameClient client,
-            ClientReplication replication)
+            ClientMessageRouter router,
+            ClientWorldReplication worldReplication,
+            ClientPlayerMovement playerMovement)
         {
             _client = client ??
                 throw new ArgumentNullException(
                     nameof(client));
 
-            _replication = replication ??
+            _router = router ??
                 throw new ArgumentNullException(
-                    nameof(replication));
+                    nameof(router));
+
+            _worldReplication = worldReplication ??
+                throw new ArgumentNullException(
+                    nameof(worldReplication));
+
+            _playerMovement = playerMovement ??
+                throw new ArgumentNullException(
+                    nameof(playerMovement));
+
+            _client.MessageReceived +=
+                OnMessageReceived;
         }
 
         public void Tick(
@@ -39,6 +55,7 @@ namespace Networking
             if (_disposed)
                 return;
 
+            // Receive packets first.
             _client.Update(now);
 
             float frameDelta =
@@ -46,24 +63,31 @@ namespace Networking
                     Math.Max(deltaTime, 0.0),
                     MaximumFrameTime);
 
-            // Remote visuals interpolate every rendered frame.
-            _replication.Interpolate(frameDelta);
+            // Remote entities interpolate every render frame.
+            _worldReplication.Interpolate(
+                frameDelta);
 
             _accumulator += frameDelta;
 
             int ticks = 0;
 
-            while (_accumulator >= TickInterval &&
+            while (_accumulator >=
+                       NetworkTime.TickInterval &&
                    ticks < MaximumTicksPerFrame)
             {
-                _replication.SendInput();
+                // One input command = one network simulation tick.
+                _playerMovement.Tick();
 
-                _accumulator -= TickInterval;
+                _accumulator -=
+                    NetworkTime.TickInterval;
+
                 ticks++;
             }
 
-            if (ticks == MaximumTicksPerFrame &&
-                _accumulator >= TickInterval)
+            if (ticks ==
+                    MaximumTicksPerFrame &&
+                _accumulator >=
+                    NetworkTime.TickInterval)
             {
                 _accumulator = 0.0;
             }
@@ -76,8 +100,24 @@ namespace Networking
 
             _disposed = true;
 
-            _replication.Dispose();
+            _client.MessageReceived -=
+                OnMessageReceived;
+
+            _playerMovement.Dispose();
+            _worldReplication.Dispose();
+
+            _router.Clear();
+
             _client.Dispose();
+        }
+
+        private void OnMessageReceived(
+            NetworkMessageType type,
+            byte[] payload)
+        {
+            _router.Dispatch(
+                type,
+                payload);
         }
     }
 }

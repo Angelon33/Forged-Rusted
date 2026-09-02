@@ -125,12 +125,17 @@ namespace Networking
                     continue;
                 }
 
-                if (deliveryEvent.Remote == null ||
+                if (_server == null ||
+                    deliveryEvent.Remote == null ||
                     !_server.Equals(
                         deliveryEvent.Remote))
                 {
                     continue;
                 }
+
+                // Any packet from the server proves that the
+                // connection is still alive, not only heartbeat ACKs.
+                _lastServerReceiveTime = now;
 
                 HandleMessage(
                     deliveryEvent.MessageType,
@@ -197,7 +202,9 @@ namespace Networking
                 return;
 
             if (_state ==
-                ClientConnectionState.Connected)
+                    ClientConnectionState.SendingReady ||
+                _state ==
+                    ClientConnectionState.Connected)
             {
                 SendMessage(
                     NetworkMessageType.Disconnect,
@@ -208,9 +215,7 @@ namespace Networking
                     });
             }
 
-            _transport.Stop();
-
-            SetState(
+            StopConnection(
                 ClientConnectionState.Stopped);
         }
 
@@ -278,9 +283,11 @@ namespace Networking
                             now);
                         break;
 
-                    case NetworkMessageType.ObjectSpawn:
-                    case NetworkMessageType.ObjectDespawn:
-                    case NetworkMessageType.WorldSnapshot:
+                    case NetworkMessageType.Disconnect:
+                        HandleDisconnect(payload);
+                        break;
+
+                    default:
                         HandleApplicationMessage(
                             type,
                             data);
@@ -297,13 +304,8 @@ namespace Networking
             NetworkMessageType type,
             byte[] data)
         {
-            if (_state !=
-                    ClientConnectionState.SendingReady &&
-                _state !=
-                    ClientConnectionState.Connected)
-            {
+            if (!IsConnected)
                 return;
-            }
 
             MessageReceived?.Invoke(
                 type,
@@ -385,6 +387,38 @@ namespace Networking
 
             SetState(
                 ClientConnectionState.Connected);
+        }
+
+        private void HandleDisconnect(
+            PacketReader payload)
+        {
+            const int expectedSize =
+                sizeof(uint) +
+                sizeof(ulong);
+
+            if (payload.Remaining != expectedSize ||
+                (_state !=
+                     ClientConnectionState.SendingReady &&
+                 _state !=
+                     ClientConnectionState.Connected))
+            {
+                return;
+            }
+
+            uint peerId =
+                payload.ReadUInt32();
+
+            ulong token =
+                payload.ReadUInt64();
+
+            if (peerId != _peerId ||
+                token != _sessionToken)
+            {
+                return;
+            }
+
+            StopConnection(
+                ClientConnectionState.Stopped);
         }
 
         private void HandleHeartbeatAck(
@@ -501,10 +535,24 @@ namespace Networking
         {
             Error?.Invoke(reason);
 
+            StopConnection(
+                ClientConnectionState.TimedOut);
+        }
+
+        private void StopConnection(
+            ClientConnectionState finalState)
+        {
             _transport.Stop();
 
-            SetState(
-                ClientConnectionState.TimedOut);
+            _server = null;
+            _clientNonce = 0;
+            _sessionToken = 0;
+            _peerId = 0;
+
+            _pendingHeartbeatSequence = 0;
+            _pendingHeartbeatSentAt = 0.0;
+
+            SetState(finalState);
         }
 
         private void SetState(

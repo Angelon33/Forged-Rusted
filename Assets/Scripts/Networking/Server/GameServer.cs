@@ -40,6 +40,9 @@ namespace Networking
         public int PeerCount =>
             _peersById.Count;
 
+        public IEnumerable<Peer> Peers =>
+            _peersById.Values;
+
         public event Action<Peer> PeerConnected;
 
         public event Action<uint> PeerDisconnected;
@@ -237,7 +240,7 @@ namespace Networking
                             payload);
                         break;
 
-                    case NetworkMessageType.PlayerInput:
+                    default:
                         HandleApplicationMessage(
                             remote,
                             type,

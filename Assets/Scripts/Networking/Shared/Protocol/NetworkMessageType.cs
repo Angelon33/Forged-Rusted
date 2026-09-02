@@ -14,6 +14,8 @@ namespace Networking
         ObjectDespawn = 9,
 
         PlayerInput = 10,
-        WorldSnapshot = 11
+        WorldSnapshot = 11,
+
+        PlayerMovementState = 12
     }
 }

@@ -245,6 +245,8 @@ namespace Networking
                             nameof(mode));
                 }
 
+                SortModules();
+
                 _previousTime = GetTime();
             }
             catch
@@ -263,9 +265,14 @@ namespace Networking
 
             // Reverse order matters for a listen server:
             // the local client disconnects before the server.
-            for (int index = _modules.Count - 1;
-                 index >= 0;
-                 index--)
+            _modules.Sort(
+                (left, right) =>
+                    left.DisposeOrder.CompareTo(
+                        right.DisposeOrder));
+
+            for (int index = 0;
+                index < _modules.Count;
+                index++)
             {
                 try
                 {
@@ -273,7 +280,8 @@ namespace Networking
                 }
                 catch (Exception exception)
                 {
-                    Debug.LogException(exception);
+                    Debug.LogException(
+                        exception);
                 }
             }
 
@@ -315,15 +323,26 @@ namespace Networking
 
             SubscribeClient();
 
-            var replication =
-                new ClientReplication(
+            var router =
+                new ClientMessageRouter();
+
+            var worldReplication =
+                new ClientWorldReplication(
+                    router,
+                    world);
+
+            var playerMovement =
+                new ClientPlayerMovement(
                     _client,
+                    router,
                     world);
 
             _modules.Add(
                 new ClientNetworkModule(
                     _client,
-                    replication));
+                    router,
+                    worldReplication,
+                    playerMovement));
 
             _client.Connect(
                 address,
@@ -342,23 +361,41 @@ namespace Networking
 
             SubscribeServer();
 
-            var replication =
-                new ServerReplication(
+            var router =
+                new ServerMessageRouter();
+
+            var playerMovement =
+                new ServerPlayerMovement(
                     _server,
+                    router,
                     world);
+
+            var interestManager =
+                new FullInterestManager(
+                    world);
+
+            var worldReplication =
+                new ServerWorldReplication(
+                    _server,
+                    world,
+                    interestManager);
 
             _modules.Add(
                 new ServerNetworkModule(
                     _server,
-                    replication,
+                    router,
+                    playerMovement,
+                    worldReplication,
                     Diagnostics));
 
-            _server.Start(serverPort);
+            _server.Start(
+                serverPort);
 
             Debug.Log(
                 $"Dedicated server started on " +
                 $"UDP port {serverPort}.");
         }
+
 
         private void InstallListenServer(
             ushort serverPort)
@@ -380,18 +417,39 @@ namespace Networking
 
             SubscribeServer();
 
-            var serverReplication =
-                new ServerReplication(
+            var serverRouter =
+                new ServerMessageRouter();
+
+            var serverPlayerMovement =
+                new ServerPlayerMovement(
                     _server,
+                    serverRouter,
                     world);
+
+            var interestManager =
+                new FullInterestManager(
+                    world);
+
+            var serverWorldReplication =
+                new ServerWorldReplication(
+                    _server,
+                    world,
+                    interestManager);
 
             _modules.Add(
                 new ServerNetworkModule(
                     _server,
-                    serverReplication,
+                    serverRouter,
+                    serverPlayerMovement,
+                    serverWorldReplication,
                     Diagnostics));
 
-            _server.Start(serverPort);
+            _server.Start(
+                serverPort);
+
+            // ------------------------
+            // Local loopback client
+            // ------------------------
 
             _client =
                 new GameClient(
@@ -402,15 +460,26 @@ namespace Networking
 
             SubscribeClient();
 
-            var clientReplication =
-                new ClientReplication(
+            var clientRouter =
+                new ClientMessageRouter();
+
+            var clientWorldReplication =
+                new ClientWorldReplication(
+                    clientRouter,
+                    world);
+
+            var clientPlayerMovement =
+                new ClientPlayerMovement(
                     _client,
+                    clientRouter,
                     world);
 
             _modules.Add(
                 new ClientNetworkModule(
                     _client,
-                    clientReplication));
+                    clientRouter,
+                    clientWorldReplication,
+                    clientPlayerMovement));
 
             _client.Connect(
                 "loopback",
@@ -421,7 +490,6 @@ namespace Networking
                 $"Listen server started on " +
                 $"UDP port {serverPort}.");
         }
-
         private INetworkTransport CreateSimulatedTransport(
             INetworkTransport transport)
         {
@@ -429,6 +497,14 @@ namespace Networking
                 transport,
                 networkSimulation,
                 Diagnostics);
+        }
+
+        private void SortModules()
+        {
+            _modules.Sort(
+                (left, right) =>
+                    left.TickOrder.CompareTo(
+                        right.TickOrder));
         }
 
         private void SubscribeServer()

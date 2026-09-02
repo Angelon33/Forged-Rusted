@@ -3,7 +3,7 @@ using UnityEngine;
 
 namespace Networking
 {
-    public readonly struct TransformSnapshotMessage
+    public readonly struct NetTransformState
     {
         public const int PayloadSize =
             sizeof(float) * 7;
@@ -12,7 +12,7 @@ namespace Networking
 
         public Quaternion Rotation { get; }
 
-        public TransformSnapshotMessage(
+        public NetTransformState(
             Vector3 position,
             Quaternion rotation)
         {
@@ -34,7 +34,7 @@ namespace Networking
 
         public static bool TryRead(
             PacketReader reader,
-            out TransformSnapshotMessage message)
+            out NetTransformState message)
         {
             message = default;
 
@@ -78,7 +78,7 @@ namespace Networking
                 }
 
                 message =
-                    new TransformSnapshotMessage(
+                    new NetTransformState(
                         position,
                         rotation.normalized);
 

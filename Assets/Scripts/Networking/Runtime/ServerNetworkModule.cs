@@ -5,16 +5,19 @@ namespace Networking
     public sealed class ServerNetworkModule
         : INetworkModule
     {
-        private const double TickInterval =
-            1.0 / 33.0;
-
+        public int TickOrder => 100;
+        public int DisposeOrder => 100;
         private const int MaximumTicksPerFrame = 5;
         private const double MaximumFrameTime = 0.25;
 
         private readonly GameServer _server;
+        private readonly ServerMessageRouter _router;
 
-        private readonly ServerReplication
-            _replication;
+        private readonly ServerPlayerMovement
+            _playerMovement;
+
+        private readonly ServerWorldReplication
+            _worldReplication;
 
         private readonly NetworkDiagnostics
             _diagnostics;
@@ -25,20 +28,33 @@ namespace Networking
 
         public ServerNetworkModule(
             GameServer server,
-            ServerReplication replication,
+            ServerMessageRouter router,
+            ServerPlayerMovement playerMovement,
+            ServerWorldReplication worldReplication,
             NetworkDiagnostics diagnostics)
         {
             _server = server ??
                 throw new ArgumentNullException(
                     nameof(server));
 
-            _replication = replication ??
+            _router = router ??
                 throw new ArgumentNullException(
-                    nameof(replication));
+                    nameof(router));
+
+            _playerMovement = playerMovement ??
+                throw new ArgumentNullException(
+                    nameof(playerMovement));
+
+            _worldReplication = worldReplication ??
+                throw new ArgumentNullException(
+                    nameof(worldReplication));
 
             _diagnostics = diagnostics ??
                 throw new ArgumentNullException(
                     nameof(diagnostics));
+
+            _server.MessageReceived +=
+                OnMessageReceived;
         }
 
         public void Tick(
@@ -48,7 +64,10 @@ namespace Networking
             if (_disposed)
                 return;
 
-            // Receive new input before running simulation.
+            /*
+             * Important:
+             * receive packets before simulation.
+             */
             _server.Update(now);
 
             _accumulator +=
@@ -58,7 +77,8 @@ namespace Networking
 
             int ticks = 0;
 
-            while (_accumulator >= TickInterval &&
+            while (_accumulator >=
+                       NetworkTime.TickInterval &&
                    ticks < MaximumTicksPerFrame)
             {
                 _serverTick++;
@@ -66,16 +86,28 @@ namespace Networking
                 _diagnostics.ServerTick =
                     _serverTick;
 
-                _replication.Tick(
-                    _serverTick,
-                    (float)TickInterval);
+                /*
+                 * ORDER MATTERS.
+                 *
+                 * 1. Simulate authoritative movement.
+                 * 2. Capture/send resulting world state.
+                 */
+                _playerMovement.Tick(
+                    _serverTick);
 
-                _accumulator -= TickInterval;
+                _worldReplication.Tick(
+                    _serverTick);
+
+                _accumulator -=
+                    NetworkTime.TickInterval;
+
                 ticks++;
             }
 
-            if (ticks == MaximumTicksPerFrame &&
-                _accumulator >= TickInterval)
+            if (ticks ==
+                    MaximumTicksPerFrame &&
+                _accumulator >=
+                    NetworkTime.TickInterval)
             {
                 _accumulator = 0.0;
             }
@@ -88,8 +120,26 @@ namespace Networking
 
             _disposed = true;
 
-            _replication.Dispose();
+            _server.MessageReceived -=
+                OnMessageReceived;
+
+            _playerMovement.Dispose();
+            _worldReplication.Dispose();
+
+            _router.Clear();
+
             _server.Dispose();
+        }
+
+        private void OnMessageReceived(
+            Peer peer,
+            NetworkMessageType type,
+            byte[] payload)
+        {
+            _router.Dispatch(
+                peer,
+                type,
+                payload);
         }
     }
 }
