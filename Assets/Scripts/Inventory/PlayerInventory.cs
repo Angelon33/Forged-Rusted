@@ -19,14 +19,8 @@ public class PlayerInventory : MonoBehaviour
     private PickupItem currentPickupTarget;
     private float pickupDistance = 5f; // Automatically updated from BlockInteraction
 
-    void Start()
+    private void Start()
     {
-        // Automatically sync reach distance with BlockInteraction
-        BlockInteraction interaction = GetComponent<BlockInteraction>();
-        if (interaction != null)
-        {
-            pickupDistance = interaction.reachDistance;
-        }
     }
 
     void Update()
