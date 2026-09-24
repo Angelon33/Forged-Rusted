@@ -32,11 +32,11 @@ Transform:
   m_GameObject: {fileID: 3264832044359321769}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 12.31364, y: 1.6, z: 8.35491}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
-  - {fileID: 340556262168110172}
+  - {fileID: 3605252320993517274}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!143 &272930055529068640
@@ -58,10 +58,10 @@ CharacterController:
   m_Enabled: 1
   serializedVersion: 3
   m_Height: 2
-  m_Radius: 0.25
+  m_Radius: 0.3
   m_SlopeLimit: 45
-  m_StepOffset: 0.3
-  m_SkinWidth: 0.08
+  m_StepOffset: 1.05
+  m_SkinWidth: 0.03
   m_MinMoveDistance: 0.001
   m_Center: {x: 0, y: 0, z: 0}
 --- !u!114 &3904237671949110878
@@ -81,8 +81,10 @@ MonoBehaviour:
   jumpSpeed: 5
   gravity: 9.81
   groundedVelocity: -0.5
+  crouchSpeedMultiplier: 0.5
   crouchHeight: 1
   heightTransitionSpeed: 10
+  crouchStepOffset: 0.25
 --- !u!114 &7898544558000809158
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -141,10 +143,12 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: bc9fa8b97b069ef45adcb334a92f29a9, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Networking.PlayerCameraRig
-  presentationRoot: {fileID: 0}
-  cameraPivot: {fileID: 0}
-  playerCamera: {fileID: 0}
-  audioListener: {fileID: 0}
+  presentationRoot: {fileID: 3605252320993517274}
+  cameraPivot: {fileID: 6703306423369673553}
+  playerCamera: {fileID: 5704869307436424196}
+  audioListener: {fileID: 289429873436107895}
+  characterMotor: {fileID: 3904237671949110878}
+  crouchCameraDrop: 0.8
   positionSmoothTime: 0.035
   snapDistance: 4
 --- !u!114 &-4955906202822475364
@@ -159,12 +163,76 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 7ba68fc6ccb217d4787b2f666a30677b, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Networking.PlayerInputReader
-  playerControls: {fileID: 0}
+  playerControls: {fileID: -944628639613478452, guid: 052faaac586de48259a63d0c4782560b, type: 3}
   actionMapName: Player
-  cameraRig: {fileID: 0}
-  mouseSensitivity: 2
+  cameraRig: {fileID: -5647688755361706222}
+  mouseSensitivity: 0.5
   verticalLookLimit: 80
   lockCursor: 1
+--- !u!1 &7963542323191331107
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 3605252320993517274}
+  m_Layer: 0
+  m_Name: PresentationRoot
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &3605252320993517274
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7963542323191331107}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 6703306423369673553}
+  m_Father: {fileID: 2819866438255802712}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &7997492154349086367
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 6703306423369673553}
+  m_Layer: 0
+  m_Name: CameraPivot
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &6703306423369673553
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7997492154349086367}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0.7, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 340556262168110172}
+  m_Father: {fileID: 3605252320993517274}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &8453348436342654053
 GameObject:
   m_ObjectHideFlags: 0
@@ -193,11 +261,11 @@ Transform:
   m_GameObject: {fileID: 8453348436342654053}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 0, y: 1.5, z: 0}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
-  m_Father: {fileID: 2819866438255802712}
+  m_Father: {fileID: 6703306423369673553}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!20 &5704869307436424196
 Camera:

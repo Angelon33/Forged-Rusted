@@ -21,6 +21,14 @@ namespace Networking
         [SerializeField]
         private AudioListener audioListener;
 
+        [Header("Crouching")]
+        [SerializeField]
+        private CharacterMotor characterMotor;
+
+        [SerializeField]
+        [Min(0f)]
+        private float crouchCameraDrop = 0.8f;
+
         [Header("Presentation smoothing")]
         [SerializeField]
         [Min(0f)]
@@ -39,6 +47,8 @@ namespace Networking
         private Vector3 _cameraLocalPosition;
         private Quaternion _cameraLocalRotation;
 
+        private Vector3 _cameraPivotStandingLocalPosition;
+
         private float _pitch;
 
         private bool _active;
@@ -55,6 +65,12 @@ namespace Networking
                     playerCamera.GetComponent<AudioListener>();
             }
 
+            if (characterMotor == null)
+            {
+                characterMotor =
+                    GetComponent<CharacterMotor>();
+            }
+
             if (presentationRoot != null)
             {
                 _presentationLocalPosition =
@@ -62,6 +78,12 @@ namespace Networking
 
                 _presentationLocalRotation =
                     presentationRoot.localRotation;
+            }
+
+            if (cameraPivot != null)
+            {
+                _cameraPivotStandingLocalPosition =
+                    cameraPivot.localPosition;
             }
 
             if (cameraPivot != null &&
@@ -74,9 +96,6 @@ namespace Networking
                         cameraPivot.localEulerAngles.x);
             }
 
-            // Every network player prefab contains a camera,
-            // but only the locally owned player may render
-            // through it.
             SetOutputActive(false);
         }
 
@@ -93,11 +112,11 @@ namespace Networking
             _presentationLocalRotation =
                 presentationRoot.localRotation;
 
+            _cameraPivotStandingLocalPosition =
+                cameraPivot.localPosition;
+
             CacheCameraOffset();
 
-            // The Camera is detached from the network player so
-            // its Transform does not inherit the discrete movement
-            // of the simulation root before LateUpdate runs.
             playerCamera.transform.SetParent(
                 null,
                 true);
@@ -105,11 +124,14 @@ namespace Networking
             _cameraDetached = true;
             _active = true;
 
-            _positionVelocity = Vector3.zero;
+            _positionVelocity =
+                Vector3.zero;
+
             _renderedPosition =
                 GetPresentationTargetPosition();
 
             ApplyPresentationImmediately();
+            ApplyCrouchCamera();
             ApplyCameraImmediately();
 
             SetOutputActive(true);
@@ -118,7 +140,9 @@ namespace Networking
         public void Deactivate()
         {
             _active = false;
-            _positionVelocity = Vector3.zero;
+
+            _positionVelocity =
+                Vector3.zero;
 
             SetOutputActive(false);
 
@@ -139,6 +163,12 @@ namespace Networking
                 _cameraDetached = false;
             }
 
+            if (cameraPivot != null)
+            {
+                cameraPivot.localPosition =
+                    _cameraPivotStandingLocalPosition;
+            }
+
             if (presentationRoot != null)
             {
                 presentationRoot.localPosition =
@@ -151,7 +181,8 @@ namespace Networking
 
         public void SetPitch(float pitch)
         {
-            _pitch = pitch;
+            _pitch =
+                pitch;
 
             if (cameraPivot == null)
                 return;
@@ -169,6 +200,7 @@ namespace Networking
                 return;
 
             UpdatePresentation();
+            ApplyCrouchCamera();
             UpdateCamera();
         }
 
@@ -207,12 +239,28 @@ namespace Networking
                         Time.unscaledDeltaTime);
             }
 
-            // Position is smoothed because simulation movement
-            // arrives in 33 Hz steps. Rotation remains immediate
-            // so mouse movement does not gain extra input lag.
             presentationRoot.SetPositionAndRotation(
                 _renderedPosition,
                 targetRotation);
+        }
+
+        private void ApplyCrouchCamera()
+        {
+            if (cameraPivot == null ||
+                characterMotor == null)
+            {
+                return;
+            }
+
+            Vector3 position =
+                _cameraPivotStandingLocalPosition;
+
+            position.y -=
+                crouchCameraDrop *
+                characterMotor.CrouchAmount;
+
+            cameraPivot.localPosition =
+                position;
         }
 
         private void UpdateCamera()
@@ -225,9 +273,6 @@ namespace Networking
                 cameraPivot.rotation *
                 _cameraLocalRotation;
 
-            // PresentationRoot already performs the smoothing.
-            // Smoothing the camera again would make the player
-            // body move relative to the camera.
             playerCamera.transform.SetPositionAndRotation(
                 desiredPosition,
                 desiredRotation);
@@ -313,6 +358,12 @@ namespace Networking
                 throw new InvalidOperationException(
                     "Assign PlayerCamera to PlayerCameraRig.");
             }
+
+            if (characterMotor == null)
+            {
+                throw new InvalidOperationException(
+                    "Assign CharacterMotor to PlayerCameraRig.");
+            }
         }
 
         private void SetOutputActive(bool active)
@@ -326,10 +377,27 @@ namespace Networking
 
         private void OnDestroy()
         {
-            Deactivate();
+            _active = false;
+
+            SetOutputActive(false);
+
+            // During destruction, do not try to parent the detached camera
+            // back under CameraPivot. The player's hierarchy may already
+            // be in the middle of being destroyed by Unity.
+            //
+            // Because the local camera was detached from the player root,
+            // destroy it explicitly so it does not survive as an orphan.
+            if (_cameraDetached &&
+                playerCamera != null)
+            {
+                Destroy(playerCamera.gameObject);
+            }
+
+            _cameraDetached = false;
         }
 
-        private static float NormalizeAngle(float angle)
+        private static float NormalizeAngle(
+            float angle)
         {
             if (angle > 180f)
                 angle -= 360f;

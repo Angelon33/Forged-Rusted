@@ -30,6 +30,7 @@ namespace Networking
     [RequireComponent(typeof(NetObject))]
     public sealed class CharacterMotor : MonoBehaviour
     {
+        [Header("Movement")]
         [SerializeField]
         private float walkSpeed = 3f;
 
@@ -45,19 +46,56 @@ namespace Networking
         [SerializeField]
         private float groundedVelocity = -0.5f;
 
+        [Header("Crouching")]
+        [SerializeField]
+        [Range(0.1f, 1f)]
+        private float crouchSpeedMultiplier = 0.5f;
+
         [SerializeField]
         private float crouchHeight = 1f;
 
         [SerializeField]
         private float heightTransitionSpeed = 10f;
 
+        [SerializeField]
+        [Min(0f)]
+        private float crouchStepOffset = 0.25f;
+
         private CharacterController _controller;
+
         private float _standingHeight;
+        private Vector3 _standingCenter;
+        private float _standingStepOffset;
+
         private float _verticalVelocity;
 
         public bool SimulationEnabled =>
             _controller != null &&
             _controller.enabled;
+
+        public bool IsCrouching =>
+            CrouchAmount > 0.01f;
+
+        public float CrouchAmount
+        {
+            get
+            {
+                if (_controller == null)
+                    return 0f;
+
+                float heightDifference =
+                    _standingHeight -
+                    crouchHeight;
+
+                if (heightDifference <= 0.001f)
+                    return 0f;
+
+                return Mathf.Clamp01(
+                    (_standingHeight -
+                     _controller.height) /
+                    heightDifference);
+            }
+        }
 
         private void Awake()
         {
@@ -67,9 +105,14 @@ namespace Networking
             _standingHeight =
                 _controller.height;
 
+            _standingCenter =
+                _controller.center;
+
+            _standingStepOffset =
+                _controller.stepOffset;
+
             // Remote replicas do not participate in collision
-            // simulation. The server or prediction system enables
-            // the CharacterController when appropriate.
+            // simulation. Server/prediction enables it as needed.
             _controller.enabled = false;
         }
 
@@ -100,12 +143,22 @@ namespace Networking
                     message.Yaw,
                     0f);
 
-            float speed = walkSpeed;
+            UpdateCrouchState(
+                message.Crouch,
+                deltaTime);
 
-            if (message.Sprint &&
-                !message.Crouch)
+            float speed =
+                walkSpeed;
+
+            if (message.Crouch)
             {
-                speed *= sprintMultiplier;
+                speed *=
+                    crouchSpeedMultiplier;
+            }
+            else if (message.Sprint)
+            {
+                speed *=
+                    sprintMultiplier;
             }
 
             Vector3 localMovement =
@@ -124,8 +177,8 @@ namespace Networking
                 _verticalVelocity =
                     groundedVelocity;
 
-                if (message.Jump &&
-                    !message.Crouch)
+                // Jumping is allowed while crouching.
+                if (message.Jump)
                 {
                     _verticalVelocity =
                         jumpSpeed;
@@ -134,12 +187,9 @@ namespace Networking
             else
             {
                 _verticalVelocity -=
-                    gravity * deltaTime;
+                    gravity *
+                    deltaTime;
             }
-
-            UpdateHeight(
-                message.Crouch,
-                deltaTime);
 
             Vector3 velocity =
                 horizontalVelocity;
@@ -148,7 +198,8 @@ namespace Networking
                 _verticalVelocity;
 
             _controller.Move(
-                velocity * deltaTime);
+                velocity *
+                deltaTime);
         }
 
         public CharacterMotorState CaptureState()
@@ -169,29 +220,32 @@ namespace Networking
             bool wasEnabled =
                 _controller.enabled;
 
-            // Disabling the CharacterController avoids it fighting
-            // an authoritative teleport during reconciliation.
             if (wasEnabled)
-                _controller.enabled = false;
+            {
+                _controller.enabled =
+                    false;
+            }
 
             transform.SetPositionAndRotation(
                 state.Position,
                 state.Rotation);
 
-            _controller.height =
-                state.ControllerHeight;
+            SetControllerHeight(
+                state.ControllerHeight);
 
-            _controller.center =
-                Vector3.zero;
+            UpdateStepOffset();
 
             if (wasEnabled)
-                _controller.enabled = true;
+            {
+                _controller.enabled =
+                    true;
+            }
 
             _verticalVelocity =
                 state.VerticalVelocity;
         }
 
-        private void UpdateHeight(
+        private void UpdateCrouchState(
             bool crouching,
             float deltaTime)
         {
@@ -207,11 +261,51 @@ namespace Networking
                     heightTransitionSpeed *
                     deltaTime);
 
+            SetControllerHeight(
+                newHeight);
+
+            UpdateStepOffset();
+        }
+
+        private void UpdateStepOffset()
+        {
+            if (_controller == null)
+                return;
+
+            _controller.stepOffset =
+                IsCrouching
+                    ? crouchStepOffset
+                    : _standingStepOffset;
+        }
+
+        private void SetControllerHeight(
+            float height)
+        {
+            float minimumHeight =
+                _controller.radius * 2f;
+
+            height =
+                Mathf.Max(
+                    height,
+                    minimumHeight);
+
             _controller.height =
-                newHeight;
+                height;
+
+            // Keep the bottom of the CharacterController fixed.
+            float standingBottom =
+                _standingCenter.y -
+                (_standingHeight * 0.5f);
+
+            Vector3 center =
+                _standingCenter;
+
+            center.y =
+                standingBottom +
+                (height * 0.5f);
 
             _controller.center =
-                Vector3.zero;
+                center;
         }
     }
 }

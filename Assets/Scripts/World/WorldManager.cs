@@ -168,6 +168,27 @@ namespace World
             }
         }
 
+        public int GetSurfaceHeight(
+    int worldX,
+    int worldZ)
+        {
+            for (int y = settings.WorldHeight - 1;
+                 y >= 0;
+                 y--)
+            {
+                BlockId block =
+                    GetBlock(
+                        worldX,
+                        y,
+                        worldZ);
+
+                if (block != BlockId.Air)
+                    return y;
+            }
+
+            return 0;
+        }
+
         public ChunkData GetOrCreateChunk(
             ChunkCoord coord)
         {

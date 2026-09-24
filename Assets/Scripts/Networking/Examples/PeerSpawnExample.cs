@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using World;
 
 namespace Networking
 {
@@ -16,11 +17,17 @@ namespace Networking
         [SerializeField]
         private float spacing = 2.5f;
 
+        [SerializeField]
+        [Min(0f)]
+        private float spawnHeightOffset = 2f;
+
         private readonly Dictionary<uint, uint>
             _objectByPeer =
                 new Dictionary<uint, uint>();
 
         private NetworkRuntime _runtime;
+        private WorldManager _worldManager;
+
         private int _spawnIndex;
 
         private void Start()
@@ -45,6 +52,19 @@ namespace Networking
                 return;
             }
 
+            _worldManager =
+                FindFirstObjectByType<WorldManager>();
+
+            if (_worldManager == null)
+            {
+                Debug.LogError(
+                    "PeerSpawnExample requires " +
+                    "a WorldManager in the scene.");
+
+                enabled = false;
+                return;
+            }
+
             _runtime.PeerConnected +=
                 OnPeerConnected;
 
@@ -64,15 +84,33 @@ namespace Networking
                 OnPeerDisconnected;
         }
 
-        private void OnPeerConnected(Peer peer)
+        private void OnPeerConnected(
+            Peer peer)
         {
-            if (_objectByPeer.ContainsKey(peer.Id))
+            if (_objectByPeer.ContainsKey(
+                peer.Id))
+            {
                 return;
+            }
+
+            float spawnX =
+                firstSpawnPosition.x +
+                (_spawnIndex++ * spacing);
+
+            float spawnZ =
+                firstSpawnPosition.z;
+
+            int surfaceY =
+                _worldManager.GetSurfaceHeight(
+                    Mathf.FloorToInt(spawnX),
+                    Mathf.FloorToInt(spawnZ));
 
             Vector3 position =
-                firstSpawnPosition +
-                Vector3.right *
-                (_spawnIndex++ * spacing);
+                new Vector3(
+                    spawnX,
+                    surfaceY +
+                    spawnHeightOffset,
+                    spawnZ);
 
             NetObject netObject =
                 _runtime.World.SpawnAuthoritative(
@@ -84,6 +122,11 @@ namespace Networking
             _objectByPeer.Add(
                 peer.Id,
                 netObject.NetworkId);
+
+            Debug.Log(
+                $"Spawned peer {peer.Id} " +
+                $"at {position}. " +
+                $"Surface Y={surfaceY}.");
         }
 
         private void OnPeerDisconnected(
@@ -98,7 +141,8 @@ namespace Networking
 
             _objectByPeer.Remove(peerId);
 
-            _runtime.World.Despawn(networkId);
+            _runtime.World.Despawn(
+                networkId);
         }
     }
 }
